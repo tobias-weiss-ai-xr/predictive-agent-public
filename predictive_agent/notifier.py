@@ -110,7 +110,7 @@ def build_alertmanager_payload(
     Args:
         alert_type: Alert name (e.g. "high_risk", "remediation", "prediction").
         pod_name: Pod key, ``namespace/name`` (or bare name).
-        risk_score: Risk score (0-100) from the predictor.
+        risk_score: Risk score (0.0-1.0) from the predictor.
         action_taken: Remediation action taken, if any.
         details: Free-text or structured incident details.
         status: Alertmanager status: "firing" or "resolved".
