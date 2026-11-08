@@ -3,10 +3,10 @@
 Sends alerts via SMTP email and HTTP webhook when remediation actions are taken
 or when risk thresholds are exceeded.
 
-Email: uses smtplib with STARTTLS to smtp.uni-marburg.de:25 (HRZ relay, no
+Email: uses smtplib with STARTTLS to smtp.example.com:25 (HRZ relay, no
   auth — port 587 submission would require SMTP credentials the operator
   does not have)
-  - Default recipient/From: tobias.weiss@uni-marburg.de
+  - Default recipient/From: alerts@example.com
     (From must be a resolvable uni address: the relay rejects other
     domains with 550 5.1.8 "Sender address rejected: Domain not found")
   - Configurable via ALERT_EMAIL_TO, ALERT_EMAIL_FROM, SMTP_HOST, SMTP_PORT,
@@ -424,15 +424,15 @@ def create_notifier_from_config() -> NotificationManager:
     Reads os.environ at call time (not import time) for testability.
     """
     # Parse comma-separated email recipients
-    alert_to = os.environ.get("ALERT_EMAIL_TO", "tobias.weiss@uni-marburg.de")
+    alert_to = os.environ.get("ALERT_EMAIL_TO", "alerts@example.com")
     to_addrs = [addr.strip() for addr in alert_to.split(",") if addr.strip()]
 
     email = EmailNotifier(
-        host=os.environ.get("SMTP_HOST", "smtp.uni-marburg.de"),
+        host=os.environ.get("SMTP_HOST", "smtp.example.com"),
         port=int(os.environ.get("SMTP_PORT", "25")),
         user=os.environ.get("SMTP_USER", ""),
         password=os.environ.get("SMTP_PASSWORD", ""),
-        from_addr=os.environ.get("ALERT_EMAIL_FROM", "tobias.weiss@uni-marburg.de"),
+        from_addr=os.environ.get("ALERT_EMAIL_FROM", "alerts@example.com"),
         to_addrs=to_addrs,
         use_tls=os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes"),
     )

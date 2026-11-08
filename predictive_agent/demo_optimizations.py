@@ -24,7 +24,7 @@ import time
 from typing import Any
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/opt/predictive-agent')
+sys.path.insert(0, '/home/weissto_local/git/predictive-agent')
 
 from predictive_agent import collector
 from predictive_agent.l1_cache import get_cache, reset_cache
@@ -204,9 +204,11 @@ def demo_kubectl_caching():
         elapsed_with_cache = print_time_elapsed("100 calls", start)
 
         # Show improvement
-        if elapsed_no_cache > 0:
+        if elapsed_no_cache > 0 and elapsed_with_cache > 0:
             speedup = elapsed_no_cache / elapsed_with_cache
             print_result("Speedup", f"{speedup:.1f}x faster")
+        elif elapsed_no_cache > 0:
+            print_result("Speedup", "infinite (cached calls too fast to measure)")
 
         # Show cache stats
         stats = collector.get_kubectl_cache_stats()

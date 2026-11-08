@@ -20,7 +20,7 @@ class TestEmailNotifier:
         defaults = dict(
             host="192.0.2.1", port=587, user="", password="",
             from_addr="predictive-agent@example.local",
-            to_addrs=["alerts@example.org"], use_tls=True,
+            to_addrs=["user@example.org"], use_tls=True,
         )
         defaults.update(kwargs)
         return EmailNotifier(**defaults)
@@ -78,13 +78,13 @@ class TestEmailNotifier:
         server = MagicMock()
         mock_smtp.return_value.__enter__.return_value = server
         notifier = self._make_notifier(
-            to_addrs=["alerts@example.org", "admin@scs.example"]
+            to_addrs=["user@example.org", "admin@scs.example"]
         )
         result = notifier.send("Test", "Body")
         assert result is True
         sendmail_args = server.sendmail.call_args
         recipients = sendmail_args[0][1]
-        assert "alerts@example.org" in recipients
+        assert "user@example.org" in recipients
         assert "admin@scs.example" in recipients
 
     @patch("predictive_agent.notifier.smtplib.SMTP")
@@ -114,7 +114,7 @@ class TestEmailNotifier:
 
     @patch("predictive_agent.notifier.smtplib.SMTP")
     def test_default_recipient_is_configured(self, mock_smtp):
-        """Default recipient is alerts@example.com (HRZ relay)."""
+        """Default recipient is alerts@example.com (configured)."""
         notifier = EmailNotifier()
         assert "alerts@example.com" in notifier.to_addrs
         assert notifier.host == "smtp.example.com"
@@ -295,7 +295,7 @@ class TestCreateNotifierFromConfig:
 
     def test_defaults(self):
         with patch.dict(os.environ, {
-            "ALERT_EMAIL_TO": "alerts@example.org",
+            "ALERT_EMAIL_TO": "user@example.org",
             "ALERT_EMAIL_FROM": "predictive-agent@example.local",
             "SMTP_HOST": "192.0.2.1",
             "SMTP_PORT": "587",
@@ -308,13 +308,13 @@ class TestCreateNotifierFromConfig:
             manager = create_notifier_from_config()
             assert manager.email.host == "192.0.2.1"
             assert manager.email.port == 587
-            assert "alerts@example.org" in manager.email.to_addrs
+            assert "user@example.org" in manager.email.to_addrs
             assert manager.email.use_tls is True
             assert manager.webhook.url == ""
 
     def test_multiple_recipients(self):
         with patch.dict(os.environ, {
-            "ALERT_EMAIL_TO": "alerts@example.org,admin@scs.example",
+            "ALERT_EMAIL_TO": "user@example.org,admin@scs.example",
             "SMTP_HOST": "192.0.2.1",
             "SMTP_PORT": "587",
             "SMTP_USE_TLS": "true",
@@ -322,7 +322,7 @@ class TestCreateNotifierFromConfig:
         }):
             manager = create_notifier_from_config()
             assert len(manager.email.to_addrs) == 2
-            assert "alerts@example.org" in manager.email.to_addrs
+            assert "user@example.org" in manager.email.to_addrs
             assert "admin@scs.example" in manager.email.to_addrs
 
     def test_webhook_url(self):

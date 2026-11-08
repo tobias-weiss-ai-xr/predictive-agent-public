@@ -222,12 +222,24 @@ def run_cmd(cmd, timeout=30, use_cache: bool = True, cache_ttl: float = 30.0) ->
 
 
 def parse_cpu(value):
-    """Parse CPU string to millicores. '100m' → 100, '1.5' → 1500."""
+    """Parse CPU string to millicores. '100m' → 100, '1.5' → 1500, '1000000' → 1000000000.
+    
+    Handles both integer and decimal values. For decimal values uses float parsing;
+    for integer values uses int parsing to avoid precision loss for large values.
+    """
     value = value.strip()
     if value.endswith("m"):
-        return int(value[:-1])
+        raw = value[:-1]
+        # Handle decimal millicores like "1.5m" -> 1.5 millicores
+        if '.' in raw:
+            return int(float(raw))
+        return int(raw)
     try:
-        return int(float(value) * 1000)
+        # Check if it's a decimal value
+        if '.' in value:
+            return int(float(value) * 1000)
+        # Integer: avoid precision loss from float conversion
+        return int(value) * 1000
     except ValueError:
         return 0
 

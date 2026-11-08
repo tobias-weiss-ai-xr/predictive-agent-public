@@ -40,6 +40,9 @@ def test_parse_cpu():
     assert parse_cpu("1.5") == 1500
     assert parse_cpu("0m") == 0
     assert parse_cpu("250m") == 250
+    # Large integer values should not lose precision
+    assert parse_cpu("1000000") == 1000000000  # 1M cores = 1B millicores
+    assert parse_cpu("1000") == 1000000  # 1000 cores = 1M millicores
 
 
 def test_parse_cpu_invalid():
