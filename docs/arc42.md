@@ -1,6 +1,6 @@
 # openDesk Predictive Agent — arc42 Architecture Documentation
 
-**Version:** v4.0.8 · **Status:** live on edge-node + example.org · **Updated:** 2026-11-07
+**Version:** v4.0.8 · **Status:** production · **Updated:** 2026-11-07
 
 This document follows the [arc42](https://arc42.org) template (12 sections). It reflects the
 implemented system, including the operational topology and the lessons from the 2026-10/11
@@ -46,7 +46,7 @@ host that needs self-healing observability and:
 | Stakeholder | Interest |
 |---|---|
 | Ops team (single operator, homelab) | Fast, truthful insight into at-risk workloads; no flapping or mislabels. |
-| LLM/GPU hosts (edge-node, gpu-node, CI) | The agent must not load the shared vLLM proxies with implicit unbounded requests. |
+| LLM/GPU hosts | The agent must not load shared LLM proxies with implicit unbounded requests. |
 
 ---
 
@@ -55,12 +55,13 @@ host that needs self-healing observability and:
 - **Runtime pairing with orchestrator:** reads Kubernetes via `kubectl` CLI or Docker via the socket;
   auto-detected at startup (`runtime` detection), no in-cluster API client.
 - **LLM via LiteLLM proxies:** all production LLM calls go through LiteLLM (`/v1/chat/completions`,
-  OpenAI-compatible). The proxy enforces model routing and (on CI) authentication.
-- **Deployment:** Docker Compose managed by Ansible (`roles/monitoring_agents`), image pulled from
-  Zot (`registry.example.org`). Per-host config via host vars; secrets via vault.
+  OpenAI-compatible). The proxy enforces model routing and (on some hosts) authentication.
+- **Deployment:** Docker Compose (see `docker-compose.yml`) for Docker-native hosts, or kustomized
+  Kubernetes manifests (`k8s/`); a Nix-built OCI image (`nix/predictive-agent.nix`).
+  Per-host config via env; secrets via environment variables / vault.
 - **Environment-driven configuration:** every tunable is an env var (`config.py`); no config files.
-- **Host network caveats:** on edge-node the agent container is on a bridge network; host services are
-  reached via the docker gateway `172.31.0.1`. On CI the agent uses host networking.
+- **Host network caveats:** on a bridge network the agent reaches host services via the docker
+  gateway `172.31.0.1`; on host networking it reaches them at `127.0.0.1`.
 
 ---
 
@@ -68,7 +69,7 @@ host that needs self-healing observability and:
 
 ### 3.1 Business Context
 
-Single-operator self-hosted infrastructure (opendesk, example.org). The agent is
+Single-operator self-hosted infrastructure. The agent is
 one node in a supervision stack: Prometheus/Grafana/Loki for classic metrics, Matrix for alert
 transport, a Neo4j knowledge graph for dependency/blast-radius, OPA for policy — and this agent for
 *failure prediction and autonomous remediation*.
@@ -79,7 +80,7 @@ transport, a Neo4j knowledge graph for dependency/blast-radius, OPA for policy �
 |---|---|---|---|
 | Kubernetes cluster(s) | `kubectl` | pod discovery, status, logs, `top` | skip pod on error |
 | Docker daemon (socket) | `docker` CLI | container discovery, inspect, stats, logs | skip on error |
-| LiteLLM proxy (edge-node `:4000`, CI `:4000`) | OpenAI `/v1/chat/completions` | LLM analysis backend (`local/deepseek-v4-flash/local`) | honest per-class fallback (§11) |
+| LiteLLM proxy | OpenAI `/v1/chat/completions` | LLM analysis backend (`local/deepseek-v4-flash/local`) | honest per-class fallback (§11) |
 | SAIA / TUD APIs | OpenAI-compatible | alternate LLM backends | backend switch per env |
 | OPA server (opt-in) | REST/Rego | pod-security + LLM-usage gates | fail-open |
 | Knowledge graph (Graphiti/Neo4j) | REST/MCP | blast radius for risk scoring | 0 (disabled) on error |
@@ -351,23 +352,21 @@ sequenceDiagram
 
 ## 7. Deployment View
 
-- **Image:** `registry.example.org/predictive-agent:v4.0.8` (Zot), built from the
-  repo `Dockerfile` (python 3.12 + git + kubectl; no curl — healthcheck uses `urllib`).
-- **Ansible:** `roles/monitoring_agents` renders `docker-compose.yml` (env from
-  `inventory/host_vars/*.yaml` + role defaults), runs the playbook
-  `playbooks/monitoring-agents.yaml`. All env archived in the compose template:
-  LLM backend (`LLM_BACKEND=openai`, `OPENAI_API_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`),
-  watch namespaces, reconcile/risk/analysis TTLs, remediation flags, SMTP relay + recipients,
-  webhook URL, metrics/health ports, resource limits, TZ.
-- **Topology (production):**
-  - **edge-node** (192.0.2.42): bridge network `monitoring-net`; LiteLLM at docker gateway
-    `172.31.0.1:4000` (bare `127.0.0.1` is unreachable from the container); watches
-    `monitoring, litellm, hubs`; SMTP via example.org.
-  - **example.org** (203.0.113.10): host networking; LiteLLM at `127.0.0.1:4000`
-    (requires API key), watches 16 namespaces; 54+ pods.
-- **LLM route:** agent → LiteLLM → `local/deepseek-v4-flash/local`; on edge-node served by the local
-  vLLM at `172.31.0.1:10801` (reached through the docker gateway), on CI over VPN to edge-node
-  `:10801` (a systemd socat forwards to gpu-node:8888).
+- **Image:** `registry.example.com:5001/predictive-agent:v4.0.8-nix` (OCI), built from
+  `nix/predictive-agent.nix` or the repo `Dockerfile` (python 3.12 + `kubectl` + `docker` CLI;
+  healthcheck uses `urllib`, no curl).
+- **Run modes:** Kubernetes (kustomized manifests in `k8s/`, namespace `openedusuite`) or
+  Docker-native (`docker compose up`, socket mounted read-only).
+- **Topology (production):** the agent runs one container per host, on either a bridge network
+  (Docker-native; reaches host services via the gateway `172.31.0.1`) or host networking.
+  It watches the configured namespaces/compose projects, calls LiteLLM for analysis, and sends
+  alerts via SMTP relay + webhook.
+- **Environment:** every tunable is an env var (LLM backend/endpoints, watch namespaces,
+  reconcile/risk/analysis TTLs, remediation flags, SMTP relay + recipients, webhook URL,
+  metrics/health ports, resource limits, TZ). See `predictive_agent/config.py` and the
+  operator runbook §3.
+- **LLM route:** agent → LiteLLM (`/v1/chat/completions`) → model (`local/deepseek-v4-flash/local`
+  by default). Optional; `LLM_BACKEND=none` runs pure predictive/planner mode.
 - **Data:** persistent volume `/var/lib/opendesk/*.json` (state model, predictions, decision model,
   Q-table); `restart: unless-stopped`; healthcheck on `/healthz` every 30 s.
 
@@ -444,14 +443,14 @@ sequenceDiagram
 | # | Risk / known issue | Status 2026-11-07 | Mitigation / work |
 |---|---|---|---|
 | 1 | **LLM analysis always failed (incident)**: LiteLLM requests full output budget when `max_tokens` omitted → HTTP 400 → generic fallback **mislabeled** `Check LLM connectivity`. 7 625+ identical entries fleet-wide. | FIXED in v4.0.5–v4.0.7 (bounded `max_tokens=4096`, honest error taxonomy, JSON-tolerant parse, timeout 300 s). | Monitored via log wording + `/metrics`. |
-| 2 | **Hub-gateway reachability:** agent on bridge net can't reach `127.0.0.1:4000` (connection refused). | FIXED (edge-node uses `172.31.0.1:4000`). | Host vars + role template; documented in ansible commit. |
+| 2 | **Hub-gateway reachability:** agent on bridge net can't reach `127.0.0.1:4000` (connection refused). | FIXED (dockered hosts use `172.31.0.1:4000`). | Host vars + env template; documented in ansible commit. |
 | 3 | **Docker restart signal lost** — `get_container_status_signals` read `State.RestartCount`, but docker inspect exposes `RestartCount` at the container **top level**; result: docker pods always reported `restarts=0` even while crash-looping. | FIXED in v4.0.8 (top-level read + new `docker_status_signals()` in collector.py). | Verified live: a deliberately crash-looping container scores 0.80 with a real restart-aware LLM analysis. |
 | 4 | **Failure detail invisible in logs** — on LLM-analysis fallback, logs printed only `severity/action`; the root-cause text (in `analysis`) and the inner exception (DEBUG) were dropped. | FIXED in v4.0.8 (`LLMAnalyzer` logs every fallback at WARNING with the underlying cause). | Bounded by per-pod TTL (300 s), so a sick LLM shows a bounded warning stream, not silence. |
 | 5 | **Stale duplicate socat containers** (`fwd-gpu-node*`) crash-looped on bound ports; agent correctly scored them DEGRADED. | FIXED operationally (containers removed; systemd units are the live forwarders). | Watch for similar `bind(): Address in use` restart storms. |
-| 6 | **SMTP relay** — direct `smtp.example.com` rejected residential IPs. | FIXED (example.org mailcow relay, recipient `alerts@example.org`). | Env-driven; uni refs purged from both repos. |
+| 6 | **SMTP relay** — directly reaching the relay `smtp.example.com:25` was rejected from residential IPs. | FIXED (mail relay via `alerts@example.org`). | Env-driven; no hardcoded relay/account in the repo. |
 | 7 | 0.5 (atten risk) vs 0.7 (LLM analysis) threshold gap: pods scoring 0.5–0.7 count as at-risk but get no analysis. | By design. | Document; consider aligning thresholds if analysis cost allows. |
 | 8 | Registry/CI drift: image tag lives in ansible role default; must be bumped together with `pyproject.toml`/`Dockerfile`. | Manual, documented. | CI pipeline could automate tag propagation. |
-| 9 | **Docker CLI dropped from image** (commit `52af6dd`) — the kubectl-only rewrite assumed docker-mode didn't need the client; the edge-node agent silently went to `0 pods tracked` with no warnings on the first build after it (v4.0.8, caught same-day). | FIXED (v4.0.8 rebuild fetches static docker CLI 29.9.1 via urllib, sha-pinned like kubectl). | Lesson: any Dockerfile change must keep BOTH runtime CLIs; verify both `docker` and `kubectl` work in the built image. |
+| 9 | **Docker CLI dropped from image** (commit `52af6dd`) — the kubectl-only rewrite assumed docker-mode didn't need the client; the dockered agent silently went to `0 pods tracked` with no warnings on the first build after it (v4.0.8, caught same-day). | FIXED (v4.0.8 rebuild fetches static docker CLI 29.9.1 via urllib, sha-pinned like kubectl). | Lesson: any Dockerfile change must keep BOTH runtime CLIs; verify both `docker` and `kubectl` work in the built image. |
 | 10 | **Verification false-fail:** a *helpful* action whose benefit isn't captured by the six resolution signals is wrongly held (`VERIFY_MIN_SIGNALS` unmet) until the hold expires. | By design, conservative — never a blind pass. | Set `resolution_signals` per action to the signals it actually moves; unblock early via `POST /review` approval (clears the hold); watch the `remediation_held` false-positive rate in `/remediation/state`. |
 
 ---

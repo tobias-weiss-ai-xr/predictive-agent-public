@@ -21,7 +21,7 @@
 
 services:
   predictive-agent:
-    image: predictive-agent:v4.0.2-nix
+    image: predictive-agent:v4.0.8-nix
     container_name: predictive-agent
     restart: unless-stopped
     environment:

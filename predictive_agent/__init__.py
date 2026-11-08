@@ -5,7 +5,7 @@ Performance Optimization Modules:
 - llm_batch: Batch processing and parallel execution for LLM calls
 - optimize: Unified performance optimization interface
 """
-__version__ = "4.0.2"
+__version__ = "4.0.8"
 
 from predictive_agent.l1_cache import L1Cache, get_cache
 from predictive_agent.llm_batch import LLMBatchProcessor, ParallelLLMProcessor

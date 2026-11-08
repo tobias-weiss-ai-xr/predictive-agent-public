@@ -44,7 +44,7 @@ spec:
 
       containers:
         - name: operator
-          image: registry.example.com:5001/predictive-agent:v4.0.2-nix
+          image: registry.example.com:5001/predictive-agent:v4.0.8-nix
           imagePullPolicy: Always
 
           securityContext:
@@ -67,7 +67,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: OPERATOR_VERSION
-              value: "4.0.2"
+              value: "4.0.8"
             - name: POD_NAME
               valueFrom:
                 fieldRef:

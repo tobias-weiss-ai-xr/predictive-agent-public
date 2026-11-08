@@ -10,11 +10,11 @@
 # Usage:
 #   ./scripts/build-nix-image.sh
 #
-# The image is tagged predictive-agent:v4.0.2-nix and loaded into `docker images`.
+# The image is tagged predictive-agent:v4.0.8-nix and loaded into `docker images`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-TAG="v4.0.2-nix"
+TAG="v4.0.8-nix"
 OUT="result-image"
 
 rm -rf "$OUT"

@@ -154,8 +154,8 @@ action's `should_execute()` before anything runs on a real cluster.
 ## 7. Alert response (self-health + watchdog)
 
 The agent emails its own failure modes. Alerts arrive as mail to
-`ALERT_EMAIL_TO` (uni HRZ relay `smtp.example.com:25`, no auth — From must
-be a resolvable uni domain or the relay rejects with `550 5.1.8`).
+`ALERT_EMAIL_TO` via the configured `SMTP_HOST` relay (no auth; the From
+address must be a resolvable domain or the relay rejects with `550 5.1.8`).
 
 | Mail / signal | Meaning | First response |
 |---|---|---|
