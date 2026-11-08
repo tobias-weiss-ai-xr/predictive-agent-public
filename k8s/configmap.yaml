@@ -1,0 +1,64 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openedusuite-predictive-agent-config
+  namespace: openedusuite
+  labels:
+    app.kubernetes.io/name: openedusuite-predictive-agent
+    app.kubernetes.io/component: operator
+data:
+  # LLM backend configuration
+  LLM_BACKEND: "ollama"
+  OLLAMA_URL: "http://ollama.llm.svc.cluster.local:11434"
+  OLLAMA_MODEL: "qwen3-30b-a3b:latest"
+  OLLAMA_TIMEOUT: "180"
+
+  # LLM analysis: threshold + re-analysis TTL for high-risk pods
+  LLM_ANALYSIS_THRESHOLD: "0.7"
+  LLM_ANALYSIS_TTL: "300"
+
+  # Reconcile configuration
+  RECONCILE_INTERVAL: "60"
+  ANALYSIS_TTL: "300"
+  ANALYSIS_TTL_MAX: "1200"
+  MAX_PODS_PER_CYCLE: "3"
+  LOG_VERBOSITY: "info"
+
+  # Prediction configuration
+  PREDICTION_ENABLED: "true"
+  PREDICTION_RISK_THRESHOLD: "0.3"
+  PREDICTION_BASE_RISK: "0.15"
+
+  # Kalman filter tuning
+  KALMAN_PROCESS_NOISE: "1.0"
+  KALMAN_MEASUREMENT_NOISE: "100.0"
+  # Per-metric Kalman parameters (memory=smooth, CPU=noisy)
+  KALMAN_MEMORY_PROCESS_NOISE: "0.5"
+  KALMAN_MEMORY_MEASUREMENT_NOISE: "50.0"
+  KALMAN_CPU_PROCESS_NOISE: "5.0"
+  KALMAN_CPU_MEASUREMENT_NOISE: "200.0"
+
+  # Watch namespaces (comma-separated)
+  OPERATOR_WATCH_NAMESPACES: "openedusuite,default,llm,monitoring,backup,kube-system"
+
+  # Remediation configuration
+  REMEDIATION_ENABLED: "true"
+  REMEDIATION_DRY_RUN: "true"
+  REMEDIATION_MAX_PER_MIN: "5"
+  REMEDIATION_MAX_PER_HOUR: "50"
+  REMEDIATION_COOLDOWN_S: "300"
+  REMEDIATION_RISK_THRESHOLD: "0.7"
+  REMEDIATION_PROTECTED_NS: "kube-system,openedusuite-predictive-agent"
+
+  # Alert configuration — Uni Marburg HRZ relay (see predictive_agent/config.py:
+  # port 25 unauthenticated; From must resolve or relay rejects 550 5.1.8)
+  ALERT_EMAIL_TO: "alerts@example.com"
+  ALERT_EMAIL_FROM: "alerts@example.com"
+
+  # SMTP configuration
+  SMTP_HOST: "smtp.example.com"
+  SMTP_PORT: "25"
+
+  # Webhook configuration
+  WEBHOOK_URL: ""

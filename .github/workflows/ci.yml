@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * *"  # nightly: mutation campaign
+
+jobs:
+  lint:
+    # Quality gates: ruff (lint) + mypy (types) on the package.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check predictive_agent/ tests/ scripts/
+      - name: Mypy
+        run: mypy predictive_agent/
+
+  quality:
+    # Tier-2 quality gates: static analysis (bandit) + dependency vulns (pip-audit).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --quiet -e ".[dev]" bandit pip-audit
+      - name: Bandit (SAST)
+        run: bandit -r predictive_agent -lll  # HIGH only; 0 findings on main
+      - name: pip-audit (dependency vulnerabilities)
+        run: pip-audit .
+      - name: Hypothesis property tests (risk model invariants)
+        run: python -m pytest -q tests/test_risk_model_properties.py
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Run tests (coverage-gated)
+        run: python -m pytest -q --cov=predictive_agent --cov-report=term
+        env:
+          # Docker/LLM-dependent tests skip gracefully when unavailable.
+          PYTHONWARNINGS: "ignore"
+      - name: Randomized-order run (order dependence)
+        # Hard gate: order independence is proven across many local seeds;
+        # seed = run number varies per run, failures reproduce locally.
+        run: |
+          python -m pip install --quiet pytest-random-order
+          python -m pytest -q -p random_order --random-order-seed=$GITHUB_RUN_NUMBER
+
+  mutation-nightly:
+    # Nightly mutation check on the safety-critical scoring/remediation core.
+    # Too slow for per-PR; a kill-rate floor catches assertion rot early.
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" mutmut
+      - name: Run mutation campaigns (scoring core + remediator)
+        run: bash scripts/mutation-campaign.sh
+        env:
+          MUTATION_MIN_KILL_RATE: "53"

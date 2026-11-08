@@ -1,0 +1,19 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: openedusuite-predictive-agent
+  namespace: openedusuite
+  labels:
+    app.kubernetes.io/name: openedusuite-predictive-agent
+    app.kubernetes.io/component: operator
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openedusuite-predictive-agent
+      app.kubernetes.io/component: operator
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

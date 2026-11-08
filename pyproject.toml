@@ -1,0 +1,153 @@
+[project]
+name = "predictive-agent"
+version = "4.0.8"
+description = "Predictive Kubernetes health monitor — Kalman filter, Markov chain, Bayesian risk scoring"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.28",
+    "urllib3>=1.26",       # imported directly (opa_client retry/timeout policies)
+    "psutil>=5.9",         # l1_cache host metrics (lazy import)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "hypothesis>=6",
+    "pytest-cov>=4",
+    "ruff>=0.4",
+    "mypy>=1.8",
+    "mutmut>=3.0",
+]
+
+[tool.setuptools]
+packages = ["predictive_agent"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+python_classes = "Test*"
+
+[tool.pylint.main]
+disable = [
+    "C0114",  # missing-module-docstring
+    "C0115",  # missing-class-docstring
+    "C0116",  # missing-function-docstring
+    "R0903",  # too-few-public-methods
+    "R0913",  # too-many-arguments
+    "R0914",  # too-many-locals
+    "R0915",  # too-many-statements
+]
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint.messages_control]
+disable = [
+    "duplicate-code",
+    "too-many-lines",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["tests/benchmark", "k8s"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade (minus the PEP 604/585 rewrites — see ignore below)
+    "B",   # bugbear
+    "SIM", # simplify
+]
+ignore = [
+    "E501", # line length handled by formatter granularity; keep diffs small
+    "SIM117", # nested with-statements are used for clarity in places
+    # PEP 604/585 rewrites emit `X | None` / builtin generics in annotations.
+    # Several modules are imported at runtime without
+    # `from __future__ import annotations`, and the suite intentionally still
+    # runs on local Python 3.9 — these rewrites crash there (TypeError on
+    # `type | None` at class-definition time).
+    "UP006", # non-pep585-annotation (List -> list)
+    "UP007", # non-pep604-annotation-union (Union[X, Y] -> X | Y)
+    "UP045", # non-pep604-annotation-optional (Optional[X] -> X | None)
+    "UP017", # datetime.timezone.utc -> datetime.UTC (3.11+ only)
+    "UP035", # deprecated typing imports — same PEP 585/604 rationale as UP006
+
+    # Whitespace inside docstrings/multiline strings (W291/W293) is string
+    # content — not worth the churn or the risk of mechanical edits.
+    "W291",
+    "W293",
+
+    # Deliberate style / needs case-by-case review to change safely:
+    "E712",   # explicit `== True/False` assertions (intentional precision in tests)
+    "E402",   # a few modules import late on purpose (cycle avoidance)
+    "B007",   # renaming unused loop vars churns diffs
+    "B904",   # raise ... from ... changes exception chaining; review per case
+    "B905",   # zip(strict=) is 3.10+; suite still runs on local Python 3.9
+    "SIM102", # collapsible-if — kept for readability
+    "SIM103", # needless-bool — returns the condition directly reads worse here
+    "SIM105", # contextlib.suppress conversion — arguable style
+    "SIM108", # ternary conversion — kept for readability
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: fixtures/shadows allowed; long files fine
+"tests/*" = ["B008", "SIM115"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true
+warn_redundant_casts = true
+exclude = ["tests/", "k8s/"]
+
+[tool.mutmut]
+# Mutation-testing campaign scoped to the freshly-extracted, safety-critical
+# phase modules (see openspec change tier-2-mutation-testing). Run on edge-node:
+#   python -m mutmut run
+#   python -m mutmut results
+source_paths = [
+    "predictive_agent/reconcile_phases.py",
+    "predictive_agent/pod_collection.py",
+    "predictive_agent/bootstrap.py",
+]
+# Full suite minus env-flaky files (server port binds + timing benchmarks
+# fail on the shared edge-node runner). Everything else exercises the mutated
+# phase modules through the facade, integration, and contract suites.
+pytest_add_cli_args_test_selection = ["tests/"]
+pytest_add_cli_args = [
+    "--no-header",
+    "-p", "no:cacheprovider",
+    "-q",
+    "--ignore=tests/test_server.py",
+    "--ignore=tests/test_decision_layer_integration.py",
+    "--ignore=tests/test_opa_integration_simple.py",
+    # Order/state-sensitive under mutmut's runner; passes standalone and
+    # exercises kalman (not a mutated module).
+    "--ignore=tests/test_kalman_params.py",
+]
+
+[tool.coverage.run]
+source = ["predictive_agent"]
+omit = [
+    "*/__pycache__/*",
+    # Demo script and 3-line entrypoint: intentionally below the ratchet.
+    # The entrypoint is covered by tests/test_cli_entrypoint.py.
+    "predictive_agent/demo_optimizations.py",
+    "predictive_agent/__main__.py",
+]
+
+[tool.coverage.report]
+# Ratchet: the suite sits at ~93%; fail if a PR erodes below 90%.
+fail_under = 90
+show_missing = false

@@ -1,0 +1,55 @@
+schema: spec-driven
+
+# Project context — shown to AI when creating artifacts.
+context: |
+  Project: openDesk Predictive Agent v4.0 — a predictive health-monitoring
+  operator for Kubernetes and Docker. Shifts from reactive (detect crash →
+  analyze) to predictive (detect trends → predict failure → warn before crash).
+
+  Tech stack:
+    - Python 3, **stdlib-only** `predictive_agent` package (no third-party runtime deps)
+    - nix (dockerTools.buildLayeredImage) for image builds
+    - Docker Compose for deployment; alternative: Kubernetes (RBAC + Deployment)
+    - Registry: Zot at registry.example.org (push/pull with user `registry`)
+    - Ansible (`ansible-private`) deploys via roles `monitoring_agents` (compose)
+      and `monitoring` (stack); `dev_agent_enabled` is OFF (container retired)
+
+  Layout:
+    - `predictive_agent/` — the package (main.py = reconcile loop entrypoint,
+      server.py = HTTP server, collector/state_model/predictor/risk/kalman/markov = logic)
+    - `tests/` — pytest suite (test_*.py); run `pytest` before marking work done
+    - `k8s/` — Kubernetes manifests (rbac.yaml, deployment.yaml)
+    - `nix/` — nix build definitions (predictive-agent.nix → tag v8.7-nix)
+    - Config is via ENV vars (OPERATOR_*); no runtime CLI args.
+
+  Conventions:
+    - Keep the package stdlib-only; add a dependency only with explicit reason.
+    - Use type hints and dataclasses for result objects.
+    - One capability per spec; kebab-case spec paths under openspec/specs/.
+    - Always run `pytest` and include/extend tests for behavioral changes.
+    - Images are built with `nix build` and pushed to the Zot registry.
+
+# Per-artifact rules (constraints applied when generating artifacts).
+rules:
+  proposal:
+    - Keep proposals under 400 words.
+    - Always include a "Non-goals" section.
+    - Name the affected capability spec(s) explicitly.
+  design:
+    - Explain WHY, not just what; note trade-offs.
+    - State the test strategy for the change.
+  tasks:
+    - Break tasks into chunks of at most ~2 hours.
+    - Every behavioral change gets a corresponding test task.
+    - Reference concrete files (e.g. `predictive_agent/collector.py`).
+
+# Per-operation guidance (advisory, separate from artifact rules).
+operations:
+  apply:
+    guidance:
+      - Run `pytest` and report a concise summary before finishing.
+      - Keep edits minimal and scoped to the change's tasks.
+  archive:
+    guidance:
+      - Summarize the archive outcome (what changed vs baseline) before finishing.
+      - Sync delta specs into the affected main specs.

@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.env
+
+# taskfleet worktrees (do not commit)
+.tf-worktrees/
+.coverage
+result
+result-image
+
+# hypothesis test cache
+.hypothesis/
+
+# mutmut working copy (campaign artifacts)
+mutants/
+mutation-report.json
+mutmut-*.log
+mutants-*.txt

@@ -1,0 +1,164 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openedusuite-predictive-agent
+  namespace: openedusuite
+  labels:
+    app.kubernetes.io/name: openedusuite-predictive-agent
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/part-of: opendesk
+    opendesk.org/component: predictive-monitor
+    opendesk.org/purpose: predictive-health
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openedusuite-predictive-agent
+      app.kubernetes.io/component: operator
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openedusuite-predictive-agent
+        app.kubernetes.io/component: operator
+        app.kubernetes.io/part-of: opendesk
+        opendesk.org/component: predictive-monitor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: openedusuite-predictive-agent
+      automountServiceAccountToken: true
+
+      # Node selection — run on any node
+      # tolerations:
+      #  - key: node-role.kubernetes.io/control-plane
+      #    operator: Exists
+      #    effect: NoSchedule
+      #  - key: node-role.kubernetes.io/master
+      #    operator: Exists
+      #    effect: NoSchedule
+
+      containers:
+        - name: operator
+          image: registry.example.com:5001/predictive-agent:v4.0.2-nix
+          imagePullPolicy: Always
+
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+          envFrom:
+            - configMapRef:
+                name: openedusuite-predictive-agent-config
+
+          env:
+            - name: OPERATOR_NAME
+              value: "openedusuite-predictive-agent"
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPERATOR_VERSION
+              value: "4.0.2"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: STATE_MODEL_FILE
+              value: "/var/lib/opendesk/state-model.json"
+            - name: PREDICTIONS_FILE
+              value: "/var/lib/opendesk/predictions.json"
+            - name: HISTORY_FILE
+              value: "/var/lib/opendesk/analysis-history.json"
+            - name: HISTORY_MAX
+              value: "100"
+            - name: OPERATOR_METRICS_BIND_ADDRESS
+              value: "0.0.0.0:8080"
+            - name: OPERATOR_HEALTH_PROBE_BIND_ADDRESS
+              value: "0.0.0.0:8081"
+            - name: TZ
+              value: "Europe/Berlin"
+
+          ports:
+            - containerPort: 8080
+              name: metrics
+              protocol: TCP
+            - containerPort: 8081
+              name: health
+              protocol: TCP
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+              scheme: HTTP
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8081
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: var-log
+              mountPath: /var/log/opendesk
+            - name: var-lib
+              mountPath: /var/lib/opendesk
+            - name: var-cache
+              mountPath: /var/cache/opendesk
+            - name: run-dir
+              mountPath: /run/opendesk
+            - name: home
+              mountPath: /home/opendesk
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: var-log
+          emptyDir: {}
+        - name: var-lib
+          persistentVolumeClaim:
+            claimName: openedusuite-predictive-agent-state
+        - name: var-cache
+          emptyDir: {}
+        - name: run-dir
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

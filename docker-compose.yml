@@ -1,0 +1,72 @@
+# Local run of the predictive-agent Nix image in Docker-native mode.
+#
+# 1. Build + load the image:
+#      ./scripts/build-nix-image.sh
+#    (requires Nix + a docker daemon; on macOS: `colima start`)
+#
+# 2. Start:
+#      docker compose up
+#
+# The container mounts the host Docker socket so the agent can discover and
+# (dry-run) remediate containers on the same host. The socket mount below
+# is /var/run/docker.sock, which on macOS+Colima is resolved INSIDE the Colima
+# VM (where the daemon listens). Do NOT mount the Mac-side proxy path
+# ~/.colima/default/docker.sock — it cannot be bind-mounted into a container.
+#
+# The agent's "namespace" in Docker mode is the compose project label
+# (com.docker.compose.project) or the container-name prefix before "_".
+# Set OPERATOR_WATCH_NAMESPACES to the compose projects you want to watch;
+# here it is set to "predagent" to match the demo containers
+# (predagent-demo-nginx / predagent-demo-redis).
+
+services:
+  predictive-agent:
+    image: predictive-agent:v4.0.2-nix
+    container_name: predictive-agent
+    restart: unless-stopped
+    environment:
+      OPERATOR_RUNTIME: docker
+      COLLECTOR_MODE: docker
+      DOCKER_SOCKET: /var/run/docker.sock
+      OPERATOR_WATCH_NAMESPACES: "predagent"
+      LLM_BACKEND: none
+      PLANNING_ENABLED: "true"
+      PLANNING_HORIZON: "3"
+      REMEDIATION_ENABLED: "true"
+      # Override on the command line: REMEDIATION_DRY_RUN=false docker compose ...
+      REMEDIATION_DRY_RUN: "${REMEDIATION_DRY_RUN:-true}"
+      RECONCILE_INTERVAL: "${RECONCILE_INTERVAL:-30}"
+      OPERATOR_METRICS_BIND_ADDRESS: 0.0.0.0:8080
+      OPERATOR_HEALTH_PROBE_BIND_ADDRESS: 0.0.0.0:8081
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - predagent-state:/var/lib/opendesk
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "/opt/predictive-agent/healthcheck.sh", "liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  predagent-state:
+
+  # ── Chaos / reproducible remediation demo (opt-in) ───────────────────────
+  # Brings up a deliberately crash-looping container so you can watch the
+  # agent detect it (risk -> CRITICAL) and execute a real restart. The name
+  # uses an underscore (predagent_chaos) so the agent's "predagent" watch
+  # namespace picks it up. It only starts with `--profile chaos`.
+  #
+  #   REMEDIATION_DRY_RUN=false docker compose --profile chaos up
+  #
+  # (The agent service above defaults to dry-run; set REMEDIATION_DRY_RUN=false
+  #  on the `predictive-agent` service to let it actually restart containers.)
+  chaos:
+    image: alpine:latest
+    container_name: predagent_chaos
+    command: ["sh", "-c", "echo 'FATAL: simulated crash loop'; sleep 1; exit 1"]
+    restart: on-failure
+    profiles: ["chaos"]
+

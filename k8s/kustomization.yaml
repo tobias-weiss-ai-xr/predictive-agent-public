@@ -1,0 +1,22 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: openedusuite
+
+resources:
+  - rbac.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - servicemonitor.yaml
+
+commonLabels:
+  app.kubernetes.io/name: openedusuite-predictive-agent
+  app.kubernetes.io/part-of: openedusuite
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  - name: registry.example.com:5001/predictive-agent
+    newTag: v8.11-nix
