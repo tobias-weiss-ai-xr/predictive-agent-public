@@ -241,6 +241,17 @@ def _initialize_llm_analyzer() -> Optional[Any]:
             )
             logger.info("LLM analyzer initialized: backend=%s, model=%s", backend_str, api_model)
             return analyzer
+        elif backend_str == "jevlocal":
+            analyzer = LLMAnalyzer(
+                backend=LLMBackend.JEVLOCAL,
+                url=config.JEVI_URL,
+                model=config.JEVI_MODEL,
+                timeout=config.JEVI_TIMEOUT,
+            )
+            logger.info(
+                "LLM analyzer initialized: backend=jevlocal, url=%s", config.JEVI_URL
+            )
+            return analyzer
         else:
             logger.warning("Unknown LLM backend '%s', LLM analysis disabled", backend_str)
             return None

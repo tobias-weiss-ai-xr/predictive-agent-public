@@ -353,3 +353,107 @@ def test_llm_build_prompt_no_prediction():
     prompt = analyzer.build_prompt(issue="Test issue", context="test context")
     assert "Test issue" in prompt
     assert "test context" in prompt
+
+
+# ─── Jev-local decision backend ─────────────────────────────────────────────
+
+def test_llm_backend_enum_jevlocal():
+    """JEVLOCAL backend maps to the 'jevlocal' config value."""
+    assert LLMBackend.JEVLOCAL.value == "jevlocal"
+
+
+def test_llm_analyzer_creation_jevlocal():
+    """Test creating a JEVLOCAL analyzer."""
+    analyzer = LLMAnalyzer(
+        backend=LLMBackend.JEVLOCAL,
+        url="http://127.0.0.1:8787",
+        model="local-jev",
+    )
+    assert analyzer.backend == LLMBackend.JEVLOCAL
+    assert analyzer.url == "http://127.0.0.1:8787"
+
+
+def test_llm_build_decision_prompt():
+    """Decision prompt carries issue, context and prediction signals."""
+    analyzer = LLMAnalyzer(backend=LLMBackend.JEVLOCAL, url="http://127.0.0.1:8787", model="m")
+    question, options = analyzer.build_decision_prompt(
+        issue="OOM predicted",
+        context="memory rising",
+        prediction={
+            "risk_score": 0.92,
+            "ttf_minutes": 8,
+            "confidence": 0.91,
+            "markov_state": "CRITICAL",
+        },
+    )
+    assert "OOM predicted" in question
+    assert "memory rising" in question
+    assert "0.92" in question
+    assert "CRITICAL" in question
+    assert [o["id"] for o in options] == ["low", "moderate", "high"]
+
+
+def test_llm_analyze_jevlocal_high_risk():
+    """analyze() maps decide-endpoint calibrated probs onto severity/action."""
+    analyzer = LLMAnalyzer(
+        backend=LLMBackend.JEVLOCAL, url="http://127.0.0.1:8787", model="m"
+    )
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.read.return_value = json.dumps({
+        "choice": 2,
+        "option_ids": ["low", "moderate", "high"],
+        "probabilities": [0.09, 0.18, 0.73],
+        "raw_probabilities": [0.03, 0.08, 0.89],
+        "temperature": 2.44,
+        "calibrated": True,
+    }).encode()
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=None)
+
+    with patch("urllib.request.urlopen", return_value=mock_response):
+        result = analyzer.analyze("Pod crash", "ns=test")
+    assert result["severity"] == "high"
+    assert result["action"] == "Remediate"
+    assert result["jev_choice"] == "high"
+    assert result["jev_probabilities"] == [0.09, 0.18, 0.73]
+    assert result["jev_calibrated"] is True
+    assert result["jev_confidence"] == 0.73
+
+
+def test_llm_analyze_jevlocal_low_risk():
+    """Low calibrated probability maps to low severity / Monitor action."""
+    analyzer = LLMAnalyzer(
+        backend=LLMBackend.JEVLOCAL, url="http://127.0.0.1:8787", model="m"
+    )
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps({
+        "choice": 0,
+        "option_ids": ["low", "moderate", "high"],
+        "probabilities": [0.8, 0.15, 0.05],
+        "temperature": 2.44,
+        "calibrated": True,
+    }).encode()
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=None)
+
+    with patch("urllib.request.urlopen", return_value=mock_response):
+        result = analyzer.analyze("flap", "ns=test")
+    assert result["severity"] == "low"
+    assert result["action"] == "Monitor"
+
+
+def test_llm_analyze_jevlocal_error_fallback():
+    """JEVLOCAL must degrade to the standard fallback when the decision
+    endpoint rejects the request, not crash the reconcile loop."""
+    analyzer = LLMAnalyzer(
+        backend=LLMBackend.JEVLOCAL, url="http://127.0.0.1:8787", model="m", timeout=5
+    )
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=urllib.error.HTTPError("u", 502, "bad gateway", None, None),
+    ):
+        result = analyzer.analyze("Pod crash", "ns=test")
+    assert result is not None
+    assert "analysis" in result
+    assert result["severity"] == "medium"

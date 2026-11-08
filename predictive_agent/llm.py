@@ -13,6 +13,7 @@ class LLMBackend(Enum):
     SAIA = "saia"
     TUD = "tud"
     OPENAI = "openai"
+    JEVLOCAL = "jevlocal"
 
 
 class LLMAnalyzer:
@@ -101,6 +102,23 @@ class LLMAnalyzer:
         try:
             import urllib.error
             import urllib.request
+
+            if self.backend == LLMBackend.JEVLOCAL:
+                # Local Jev-style decision model: calibrated choice probabilities
+                # from the laptop-GPU decide endpoint, no free text. Map the
+                # argmax back to the severity/action schema every caller expects.
+                question, options = self.build_decision_prompt(issue, context, prediction)
+                jdata = json.dumps({"question": question, "options": options}).encode("utf-8")
+                jreq = urllib.request.Request(
+                    f"{self.url.rstrip('/')}/decide",
+                    data=jdata,
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(jreq, timeout=self.timeout) as response:
+                    res = json.loads(response.read().decode("utf-8"))
+                if not res.get("option_ids") or not res.get("probabilities"):
+                    raise ValueError("decision endpoint returned no probabilities")
+                return self._jev_result(res)
 
             if self.backend == LLMBackend.OLLAMA:
                 endpoint = f"{self.url.rstrip('/')}/api/chat"
@@ -250,6 +268,61 @@ class LLMAnalyzer:
                     if depth == 0:
                         return text[start:i + 1]
         return text[start:]
+
+    def build_decision_prompt(self, issue, context, prediction=None):
+        """Build the (question, options) pair for a local Jev-style decision.
+
+        The decision model scores three risk grades and returns calibrated
+        probabilities; it never generates free text (one forward pass)."""
+        question = (
+            f"An operator agent monitors a Kubernetes workload.\n"
+            f"Issue: {issue}\nContext: {context}"
+        )
+        if prediction:
+            question += (
+                f"\nPrediction: risk_score={prediction.get('risk_score')}, "
+                f"ttf_minutes={prediction.get('ttf_minutes')}, "
+                f"confidence={prediction.get('confidence')}, "
+                f"markov_state={prediction.get('markov_state')}"
+            )
+        question += (
+            "\nGiven all this, how likely is the workload to keep failing "
+            "without intervention?"
+        )
+        options = [
+            {"id": "low", "text": "Low risk - it will stabilise or self-heal, no action needed"},
+            {"id": "moderate", "text": "Moderate - monitor closely and schedule a review"},
+            {"id": "high", "text": "High risk - it will keep failing, needs active remediation"},
+        ]
+        return question, options
+
+    @staticmethod
+    def _jev_result(res):
+        """Map a decide-endpoint response onto the analysis schema."""
+        ids = res.get("option_ids", [])
+        probs = res.get("probabilities", [])
+        choice = res.get("choice", 0)
+        calibrated = bool(res.get("calibrated"))
+        choice_id = ids[choice] if ids and 0 <= choice < len(ids) else (ids[0] if ids else "low")
+        severity = {"low": "low", "moderate": "medium", "high": "high"}.get(choice_id, "medium")
+        action = {
+            "low": "Monitor",
+            "moderate": "Escalate for review",
+            "high": "Remediate",
+        }.get(choice_id, "Monitor")
+        labels = {"low": "low", "moderate": "moderate", "high": "high"}
+        odds = ", ".join(f"{labels.get(i, i)}={p:.2f}" for i, p in zip(ids, probs))
+        return {
+            "analysis": f"Jev decision: P({odds}); chose {choice_id} (calibrated={calibrated})",
+            "severity": severity,
+            "action": action,
+            "command": "",
+            "jev_choice": choice_id,
+            "jev_option_ids": ids,
+            "jev_probabilities": probs,
+            "jev_calibrated": calibrated,
+            "jev_confidence": round(max(probs), 4) if probs else 0.0,
+        }
 
     def _fallback_response(self):
         """Generate fallback response for invalid JSON."""

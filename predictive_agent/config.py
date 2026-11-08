@@ -12,7 +12,7 @@ WATCH_NAMESPACES = os.environ.get(
 SKIP_NAMESPACES = {"opendesk-predictive-agent"}
 
 # ─── LLM Backend ─────────────────────────────────────────────────────────────
-LLM_BACKEND = os.environ.get("LLM_BACKEND", "ollama")  # ollama, saia, openai
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "ollama")  # ollama, saia, openai, tud, jevlocal
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama.llm.svc.cluster.local:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3-30b-a3b:latest")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "300"))
@@ -28,6 +28,13 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 TUD_API_URL = os.environ.get("TUD_API_URL", "https://api.tud-llm.de/v1")
 TUD_API_KEY = os.environ.get("TUD_API_KEY", "")
 TUD_MODEL = os.environ.get("TUD_MODEL", "GLM-5.2-AWQ-INT4")
+
+# Local Jev-style decision model — calibrated choice probabilities from a
+# laptop-GPU decide endpoint (graphwiz-jev scripts/decide-server.py). The model
+# never generates free text; it scores options in one forward pass.
+JEVI_URL = os.environ.get("JEVI_URL", "http://127.0.0.1:8787")
+JEVI_MODEL = os.environ.get("JEVI_MODEL", "local-jev")
+JEVI_TIMEOUT = int(os.environ.get("JEVI_TIMEOUT", "120"))
 
 # ─── Reconcile ───────────────────────────────────────────────────────────────
 RECONCILE_INTERVAL = int(os.environ.get("RECONCILE_INTERVAL", "60"))
