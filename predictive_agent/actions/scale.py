@@ -106,8 +106,10 @@ class DeploymentScaleAction(RemediationAction):
                 desired_state={"replicas": current_replicas},
             )
 
+        # target may be namespace/name or just name; kubectl needs just the name
+        dep_name = target.split("/")[-1]
         cmd = [
-            "kubectl", "scale", "deployment", target,
+            "kubectl", "scale", "deployment", dep_name,
             "-n", context.namespace,
             f"--replicas={new_replicas}",
         ]
@@ -178,8 +180,10 @@ class DeploymentScaleAction(RemediationAction):
                 target,
             )
             return None
+        # target may be namespace/name or just name; kubectl needs just the name
+        dep_name = target.split("/")[-1]
         cmd = [
-            "kubectl", "scale", "deployment", target,
+            "kubectl", "scale", "deployment", dep_name,
             "-n", context.namespace,
             f"--replicas={int(prev_replicas)}",
         ]

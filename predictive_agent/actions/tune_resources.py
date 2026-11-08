@@ -97,8 +97,10 @@ class ResourceTunerAction(RemediationAction):
         ]
 
         patch_str = json.dumps(patch)
+        # target may be namespace/name or just name; kubectl needs just the name
+        dep_name = target.split("/")[-1]
         cmd = [
-            "kubectl", "patch", "deployment", target,
+            "kubectl", "patch", "deployment", dep_name,
             "-n", context.namespace,
             "--type=json",
             f"-p={patch_str}",

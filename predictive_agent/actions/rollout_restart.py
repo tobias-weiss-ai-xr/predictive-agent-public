@@ -69,8 +69,10 @@ class RolloutRestartAction(RemediationAction):
 
         In dry_run mode, uses --dry-run=server.
         """
+        # target may be namespace/name or just name; kubectl needs just the name
+        dep_name = target.split("/")[-1]
         cmd = [
-            "kubectl", "rollout", "restart", "deployment", target,
+            "kubectl", "rollout", "restart", "deployment", dep_name,
             "-n", context.namespace,
         ]
         if context.dry_run:

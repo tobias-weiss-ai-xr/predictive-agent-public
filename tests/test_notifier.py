@@ -384,10 +384,10 @@ class TestBuildAlertmanagerPayload:
         assert "namespace" not in labels
 
     def test_severity_mapping(self):
-        """Test severity is derived from the real risk score."""
-        assert build_alertmanager_payload("a", "x/y", 95.0)["alerts"][0]["labels"]["severity"] == "critical"
-        assert build_alertmanager_payload("a", "x/y", 80.0)["alerts"][0]["labels"]["severity"] == "warning"
-        assert build_alertmanager_payload("a", "x/y", 45.0)["alerts"][0]["labels"]["severity"] == "info"
+        """Test severity is derived from the real risk score (0-1 scale)."""
+        assert build_alertmanager_payload("a", "x/y", 0.95)["alerts"][0]["labels"]["severity"] == "critical"
+        assert build_alertmanager_payload("a", "x/y", 0.80)["alerts"][0]["labels"]["severity"] == "warning"
+        assert build_alertmanager_payload("a", "x/y", 0.45)["alerts"][0]["labels"]["severity"] == "info"
 
     def test_severity_override(self):
         """Test an explicit severity wins over the risk-derived value."""

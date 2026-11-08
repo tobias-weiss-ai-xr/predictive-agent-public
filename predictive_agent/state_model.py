@@ -1,6 +1,7 @@
 """Pod state tracking with Kalman filters and state classification."""
 
 import os
+import threading
 from datetime import datetime, timezone
 
 from predictive_agent.kalman import KalmanTrend
@@ -137,7 +138,6 @@ class PodTracker:
         self.memory_anomaly_score = 0.0
         self.cpu_anomaly_score = 0.0
         self._created_at = None  # set on first update
-        self._timestamps = []
 
     def update(self, memory_mib, memory_limit_mib, cpu_m, restart_count, log_errors, node_pressure):
         """Update pod metrics and Kalman filters."""
@@ -197,7 +197,7 @@ class PodTracker:
             self._pending_state = None
             self._pending_count = 0
 
-        self._timestamps.append(len(self._timestamps))
+
 
     @property
     def memory_trend(self):
@@ -240,22 +240,40 @@ class StateModel:
     def __init__(self):
         self.pods = {}
         self.markov = MarkovChain()
+        self._lock = threading.Lock()
 
     def track_pod(self, namespace, name):
         """Start tracking a pod."""
         pod_key = f"{namespace}/{name}"
-        if pod_key not in self.pods:
-            self.pods[pod_key] = PodTracker(namespace, name)
-        return self.pods[pod_key]
+        with self._lock:
+            if pod_key not in self.pods:
+                self.pods[pod_key] = PodTracker(namespace, name)
+            return self.pods[pod_key]
+
+    def get_pods_snapshot(self):
+        """Return a thread-safe snapshot copy of all tracked pods."""
+        with self._lock:
+            return dict(self.pods)
 
     def update_pod(self, namespace, name, memory_mib, memory_limit_mib, cpu_m,
-                   restart_count, log_errors, node_pressure, node_name=""):
+                   restart_count, log_errors, node_pressure, node_name="", created_at=None):
         """Update pod metrics and return the tracker.
 
         Records Markov chain state transitions when the pod's state changes.
+        Args:
+            created_at: Optional pod creation timestamp (datetime or ISO string).
+                       Used to compute accurate restart rate.
         """
         tracker = self.track_pod(namespace, name)
         tracker.node_name = node_name
+        if created_at is not None:
+            if isinstance(created_at, str):
+                try:
+                    tracker._created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+            else:
+                tracker._created_at = created_at
         prev_state = tracker.state
         tracker.update(
             memory_mib=memory_mib,

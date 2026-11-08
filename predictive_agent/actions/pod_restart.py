@@ -60,8 +60,10 @@ class PodRestartAction(RemediationAction):
 
         In dry_run mode, uses --dry-run=server.
         """
+        # target may be namespace/name or just name; kubectl needs just the name
+        pod_name = target.split("/")[-1]
         cmd = [
-            "kubectl", "delete", "pod", target,
+            "kubectl", "delete", "pod", pod_name,
             "-n", context.namespace,
         ]
         if context.dry_run:

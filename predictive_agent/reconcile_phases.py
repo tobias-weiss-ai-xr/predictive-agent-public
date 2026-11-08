@@ -549,6 +549,7 @@ def evaluate_pods(
                 log_errors=log_errors,
                 node_pressure=mem_pressure,
                 node_name=node_name if runtime != "docker" else "docker-host",
+                created_at=pod.get("metadata", {}).get("creationTimestamp", ""),
             )
         pods_tracked += 1
 

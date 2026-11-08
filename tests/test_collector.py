@@ -54,6 +54,11 @@ def test_parse_memory():
     assert parse_memory("2Gi") == 2048
     assert parse_memory("1024Ki") == 1
     assert parse_memory("1Ti") == 1048576
+    # Decimal values (e.g. from kubectl top with fractional Gi)
+    assert parse_memory("1.5Gi") == 1536
+    assert parse_memory("0.5Gi") == 512
+    assert parse_memory("1.25Gi") == 1280
+    assert parse_memory("0.25Mi") == 0  # 256Ki // 1024 = 0 MiB
 
 
 def test_parse_memory_invalid():

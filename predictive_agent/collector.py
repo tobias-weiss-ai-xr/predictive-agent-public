@@ -233,19 +233,37 @@ def parse_cpu(value):
 
 
 def parse_memory(value):
-    """Parse memory string to MiB. '128Mi' → 128, '2Gi' → 2048."""
+    """Parse memory string to MiB. '128Mi' → 128, '2Gi' → 2048, '1.5Gi' → 1536.
+    
+    Handles both integer and decimal values (e.g. '1.5Gi'). For decimal values,
+    uses float parsing but falls back to integer parsing to avoid precision loss
+    for very large integers.
+    """
     value = value.strip()
-    if value.endswith("Mi"):
-        return int(value[:-2])
-    elif value.endswith("Gi"):
-        return int(value[:-2]) * 1024
-    elif value.endswith("Ki"):
-        return int(value[:-2]) // 1024
-    elif value.endswith("Ti"):
-        return int(value[:-2]) * 1024 * 1024
     try:
+        if value.endswith("Mi"):
+            raw = value[:-2]
+            if '.' in raw:
+                return int(float(raw))
+            return int(raw)
+        elif value.endswith("Gi"):
+            raw = value[:-2]
+            if '.' in raw:
+                return int(float(raw) * 1024)
+            return int(raw) * 1024
+        elif value.endswith("Ki"):
+            raw = value[:-2]
+            if '.' in raw:
+                return int(float(raw) // 1024)
+            # Integer: divide first to avoid overflow
+            return int(raw) // 1024
+        elif value.endswith("Ti"):
+            raw = value[:-2]
+            if '.' in raw:
+                return int(float(raw) * 1024 * 1024)
+            return int(raw) * 1024 * 1024
         return int(value) // (1024 * 1024)  # bytes to MiB
-    except ValueError:
+    except (ValueError, TypeError):
         return 0
 
 

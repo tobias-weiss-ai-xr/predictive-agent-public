@@ -242,7 +242,13 @@ class RequestHandler(BaseHTTPRequestHandler):
         sm = _context.state_model
         pred = _context.predictor
 
-        pods_tracked = len(sm.pods) if sm is not None else 0
+        # Thread-safe snapshot of pods
+        if sm is not None:
+            pods_snapshot = getattr(sm, 'get_pods_snapshot', lambda: dict(sm.pods))()
+            pods_tracked = len(pods_snapshot)
+        else:
+            pods_snapshot = {}
+            pods_tracked = 0
         predictions = _all_predictions(pred)
         predictions_count = len(predictions)
         risk_score = max((p.risk_score for p in predictions), default=0.0)
@@ -328,7 +334,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             lines.append("# TYPE opendesk_predictive_agent_markov_transition gauge")
             lines.append("# HELP opendesk_predictive_agent_pod_anomaly_score Per-pod anomaly score (0=normal, >3=anomalous)")
             lines.append("# TYPE opendesk_predictive_agent_pod_anomaly_score gauge")
-            for pod_key, tracker in sm.pods.items():
+            for pod_key, tracker in pods_snapshot.items():
                 cpu_trend = getattr(tracker, 'cpu_trend', 0.0) or 0.0
                 mem_trend = getattr(tracker, 'memory_trend', 0.0) or 0.0
                 restart_count = getattr(tracker, 'restart_count', 0)

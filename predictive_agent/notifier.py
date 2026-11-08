@@ -3,10 +3,10 @@
 Sends alerts via SMTP email and HTTP webhook when remediation actions are taken
 or when risk thresholds are exceeded.
 
-Email: uses smtplib with STARTTLS to smtp.example.com:25 (HRZ relay, no
+Email: uses smtplib with STARTTLS to smtp.uni-marburg.de:25 (HRZ relay, no
   auth — port 587 submission would require SMTP credentials the operator
   does not have)
-  - Default recipient/From: alerts@example.com
+  - Default recipient/From: tobias.weiss@uni-marburg.de
     (From must be a resolvable uni address: the relay rejects other
     domains with 550 5.1.8 "Sender address rejected: Domain not found")
   - Configurable via ALERT_EMAIL_TO, ALERT_EMAIL_FROM, SMTP_HOST, SMTP_PORT,
@@ -71,14 +71,13 @@ def _rfc3339_now() -> str:
 
 
 def _severity_for_risk(risk_score: float) -> str:
-    """Map a risk score (0-100) to an Alertmanager label severity.
+    """Map a risk score (0-1) to an Alertmanager label severity.
 
-    Thresholds: >= 90 critical, >= 70 warning, otherwise info. The same
-    risk_score the rest of the agent already computes — no invented values.
+    Thresholds: >= 0.9 critical, >= 0.7 warning, otherwise info.
     """
-    if risk_score >= 90:
+    if risk_score >= 0.9:
         return "critical"
-    if risk_score >= 70:
+    if risk_score >= 0.7:
         return "warning"
     return "info"
 
@@ -311,7 +310,7 @@ class NotificationManager:
         Args:
             alert_type: Type of alert (e.g., "high_risk", "remediation", "prediction")
             pod_name: Name of the pod that triggered the alert
-            risk_score: Risk score (0-100)
+            risk_score: Risk score (0.0-1.0)
             action_taken: Remediation action taken (e.g., "pod_restart", "node_cordon")
             details: Additional details (JSON string or free text)
 
@@ -425,15 +424,15 @@ def create_notifier_from_config() -> NotificationManager:
     Reads os.environ at call time (not import time) for testability.
     """
     # Parse comma-separated email recipients
-    alert_to = os.environ.get("ALERT_EMAIL_TO", "alerts@example.com")
+    alert_to = os.environ.get("ALERT_EMAIL_TO", "tobias.weiss@uni-marburg.de")
     to_addrs = [addr.strip() for addr in alert_to.split(",") if addr.strip()]
 
     email = EmailNotifier(
-        host=os.environ.get("SMTP_HOST", "smtp.example.com"),
+        host=os.environ.get("SMTP_HOST", "smtp.uni-marburg.de"),
         port=int(os.environ.get("SMTP_PORT", "25")),
         user=os.environ.get("SMTP_USER", ""),
         password=os.environ.get("SMTP_PASSWORD", ""),
-        from_addr=os.environ.get("ALERT_EMAIL_FROM", "alerts@example.com"),
+        from_addr=os.environ.get("ALERT_EMAIL_FROM", "tobias.weiss@uni-marburg.de"),
         to_addrs=to_addrs,
         use_tls=os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes"),
     )
