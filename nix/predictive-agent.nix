@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Predictive Agent v4.0.8 — Predictive Kubernetes Health Monitor with Performance Optimizations
-# Image: predictive-agent:v8.12-nix
+# Image: predictive-agent:v4.0.8-nix
 # Built with: Nix dockerTools.buildLayeredImage using nixpkgs
 # Contains: python3, curl, bash, kubectl, coreutils, gnugrep, gnused, procps, cacert
 # Entrypoint: runs predictive_agent.main (the reconcile loop)
@@ -65,7 +65,7 @@ let
 in
 pkgs.dockerTools.buildLayeredImage {
   name = "predictive-agent";
-  tag = "v8.12-nix";
+  tag = "v4.0.8-nix";
 
   contents = with pkgs; [
     python3
