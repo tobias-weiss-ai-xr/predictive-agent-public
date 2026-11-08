@@ -1,4 +1,4 @@
-# openDesk Predictive Agent — arc42 Architecture Documentation
+# Predictive Agent — arc42 Architecture Documentation
 
 **Version:** v4.0.8 · **Status:** production · **Updated:** 2026-11-07
 

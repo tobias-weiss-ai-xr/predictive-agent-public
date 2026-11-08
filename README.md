@@ -1,9 +1,9 @@
-# openDesk Predictive Agent (v4.0.8)
+# Predictive Agent
 
 **Predictive health monitor for Kubernetes and Docker — detects failure trends,
 predicts crashes, and remediates before they happen.**
 
-The agent runs a 60-second reconcile loop: it collects pod/container metrics,
+It runs a 60-second reconcile loop: it collects pod/container metrics,
 estimates resource trends with a Kalman filter, models pod-state transitions
 with a Markov chain, scores failure risk from six signals, and — when risk
 crosses the threshold — plans and executes remediation through a POMDP-style
