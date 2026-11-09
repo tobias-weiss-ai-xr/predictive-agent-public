@@ -14,7 +14,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-TAG="v4.0.8-nix"
+TAG="v4.0.8.1-nix"
 OUT="result-image"
 
 rm -rf "$OUT"

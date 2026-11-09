@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# Predictive Agent v4.0.8 — Predictive Kubernetes Health Monitor with Performance Optimizations
-# Image: predictive-agent:v4.0.8-nix
+# Predictive Agent v4.0.8.1 — Predictive Kubernetes Health Monitor with Performance Optimizations
+# Image: predictive-agent:v4.0.8.1-nix
 # Built with: Nix dockerTools.buildLayeredImage using nixpkgs
 # Contains: python3, curl, bash, kubectl, coreutils, gnugrep, gnused, procps, cacert
 # Entrypoint: runs predictive_agent.main (the reconcile loop)
@@ -16,7 +16,7 @@ let
   entrypointSh = pkgs.writeText "entrypoint.sh" (builtins.readFile ./predictive-agent-files/entrypoint.sh);
   healthcheckSh = pkgs.writeText "healthcheck.sh" (builtins.readFile ./predictive-agent-files/healthcheck.sh);
 
-  # The v4.0.8 predictive_agent package (stdlib-only Python) with optimizations.
+  # The v4.0.8.1 predictive_agent package (stdlib-only Python) with optimizations.
   # Copy all modules: main package, actions, optimizer, cache, llm_batch, benchmark tests.
   # Also copy the tests/benchmark directory for potential in-container testing.
   predictiveAgentPackage = pkgs.runCommand "predictive-agent-package" {} ''
@@ -33,7 +33,7 @@ let
     cp ${../predictive_agent/optimize.py} $out/opt/predictive-agent/predictive_agent/
     cp ${../predictive_agent/demo_optimizations.py} $out/opt/predictive-agent/predictive_agent/
     
-    # OPA Integration modules (NEW in v4.0.8)
+    # OPA Integration modules (NEW in v4.0.8.1)
     cp ${../predictive_agent/opa_client.py} $out/opt/predictive-agent/predictive_agent/
     cp ${../predictive_agent/opa_cache.py} $out/opt/predictive-agent/predictive_agent/
     cp ${../predictive_agent/opa_integration.py} $out/opt/predictive-agent/predictive_agent/
@@ -65,7 +65,7 @@ let
 in
 pkgs.dockerTools.buildLayeredImage {
   name = "predictive-agent";
-  tag = "v4.0.8-nix";
+  tag = "v4.0.8.1-nix";
 
   contents = with pkgs; [
     python3
@@ -93,7 +93,7 @@ pkgs.dockerTools.buildLayeredImage {
     ];
     Cmd = [];
     Env = [
-      "OPERATOR_VERSION=4.0.8"
+      "OPERATOR_VERSION=4.0.8.1"
       "OPERATOR_NAME=opendesk-predictive-agent"
       "OPERATOR_NAMESPACE=opendesk-predictive-agent"
       "OPERATOR_WATCH_NAMESPACES=opendesk,opendesk-edu,default,llm"
