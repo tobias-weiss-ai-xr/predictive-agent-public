@@ -9,10 +9,13 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      pav = import ./nix/predictive-agent.nix { inherit pkgs; };
     in
     {
-      packages.${system}.predictive-agent = import ./nix/predictive-agent.nix { inherit pkgs; };
-      packages.${system}.default = self.packages.${system}.predictive-agent;
+      packages.${system} = {
+        predictive-agent = pav;
+        default = pav;
+      };
 
       # `nix develop` for iterating on the package / building locally.
       devShells.${system}.default = pkgs.mkShell {
