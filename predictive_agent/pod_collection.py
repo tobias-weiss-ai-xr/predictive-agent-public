@@ -162,16 +162,29 @@ def get_pod_name(pod: dict) -> str:
 
 
 def get_pod_memory_limit(pod: dict, container_name: str = "") -> int:
-    """Extract memory limit in MiB from pod spec."""
+    """Extract memory limit in MiB from pod spec.
+
+    Without ``container_name`` the sum over all containers is returned, so the
+    limit is comparable to ``kubectl top pods`` which reports whole-pod usage.
+    Returning only the first container's limit here inflated memory_pct for
+    multi-container pods (e.g. csi-nfs-node: ~95Mi used across 3 containers vs
+    the 100Mi limit of liveness-probe -> a wrong 95%).
+    """
     spec = pod.get("spec", {})
+    total = 0
+    found = False
     for container in spec.get("containers", []):
         if container_name and container.get("name", "") != container_name:
             continue
         limits = container.get("resources", {}).get("limits", {})
         if "memory" in limits:
             from predictive_agent.collector import parse_memory
-            return parse_memory(limits["memory"])
-    return 0
+            total += parse_memory(limits["memory"])
+            found = True
+            if container_name:
+                # Named lookup: return that container's limit directly.
+                return parse_memory(limits["memory"])
+    return total if (found and not container_name) else 0
 
 
 def should_skip_namespace(ns: str) -> bool:

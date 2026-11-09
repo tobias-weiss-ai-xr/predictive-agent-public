@@ -148,6 +148,25 @@ def test_get_pod_memory_limit_matches_named_container():
     assert pod_collection.get_pod_memory_limit(pod, "c2") > 0
 
 
+def test_get_pod_memory_limit_sums_all_containers():
+    """Whole-pod limit must be the sum over containers (kubectl top reports
+    whole-pod usage). Returning only the first limit inflated memory_pct for
+    multi-container pods (e.g. csi-nfs-node)."""
+    pod = {"spec": {"containers": [
+        {"name": "c1", "resources": {"limits": {"memory": "100Mi"}}},
+        {"name": "c2", "resources": {"limits": {"memory": "100Mi"}}},
+        {"name": "c3", "resources": {"limits": {"memory": "300Mi"}}}]}}
+    assert pod_collection.get_pod_memory_limit(pod) == 500
+
+
+def test_get_pod_memory_limit_named_returns_only_that_container():
+    pod = {"spec": {"containers": [
+        {"name": "c1", "resources": {"limits": {"memory": "100Mi"}}},
+        {"name": "c2", "resources": {"limits": {"memory": "300Mi"}}}]}}
+    assert pod_collection.get_pod_memory_limit(pod, "c1") == 100
+    assert pod_collection.get_pod_memory_limit(pod, "c2") == 300
+
+
 # ── should_skip_namespace ──────────────────────────────────────────────────
 
 
