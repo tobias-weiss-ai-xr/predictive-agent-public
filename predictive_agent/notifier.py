@@ -16,13 +16,26 @@ Webhook: uses urllib.request to POST JSON to WEBHOOK_URL
   - Configurable via WEBHOOK_URL
   - No-op if WEBHOOK_URL is empty
 
+Channels (NOTIFY_CHANNEL, default "matrix"):
+  "matrix" — webhook only, in the standard Alertmanager v4 webhook schema
+             (an ``alerts`` list whose entries carry ``labels``,
+             ``annotations`` and ``startsAt``) so any Alertmanager-
+             compatible receiver (incident-bridge, the in-cluster
+             matrix-alertbridge relay) can ingest it. Email is NOT sent.
+  "email"  — SMTP email only, no webhook.
+  "both"   — email AND a plain JSON webhook (legacy behaviour).
+  "none"   — notifications are recorded in history but not delivered.
+
+"matrix" is the default channel: alert volume (e.g. the
+remediation_exhausted nudges every reconcile cycle) belongs in a
+push/chat inbox, not a human mailbox. Email can be re-enabled per
+environment with NOTIFY_CHANNEL=both (or NOTIFY_CHANNEL=email).
+
 Alertmanager-compatible payloads for incident-bridge:
   build_alertmanager_payload() / WebhookNotifier.send_alertmanager() /
   NotificationManager.notify_alertmanager() emit incidents in the standard
-  Alertmanager v4 webhook schema (an ``alerts`` list whose entries carry
-  ``labels``, ``annotations``, and ``startsAt``) so they can be consumed by
-  incident-bridge or any Alertmanager-compatible receiver. Unreachable
-  endpoints never raise — they log a warning and return False.
+  Alertmanager v4 webhook schema. Unreachable endpoints never raise — they
+  log a warning and return False.
 """
 
 from __future__ import annotations
@@ -286,15 +299,25 @@ class WebhookNotifier:
 
 
 class NotificationManager:
-    """Manage email and webhook notifications for remediation alerts."""
+    """Manage email and webhook notifications for remediation alerts.
+
+    Channel selection (NOTIFY_CHANNEL):
+      matrix (default) — webhook only, Alertmanager v4 payload (ingestible by
+                         the matrix-alertbridge / incident-bridge relays)
+      email            — SMTP email only
+      both             — email AND a plain JSON webhook (legacy behaviour)
+      none             — record in history, deliver to no channel
+    """
 
     def __init__(
         self,
         email_notifier: Optional[EmailNotifier] = None,
         webhook_notifier: Optional[WebhookNotifier] = None,
+        channel: Optional[str] = None,
     ):
         self.email = email_notifier or EmailNotifier()
         self.webhook = webhook_notifier or WebhookNotifier()
+        self.channel = (channel or os.environ.get("NOTIFY_CHANNEL", "matrix")).lower()
         self.history: list[dict] = []
 
     def notify(
@@ -305,7 +328,12 @@ class NotificationManager:
         action_taken: str,
         details: str = "",
     ) -> tuple[bool, bool]:
-        """Send notification via both email and webhook.
+        """Send notification on the configured channel(s).
+
+        With the default channel ("matrix") the payload is the standard
+        Alertmanager v4 webhook schema so the matrix-alertbridge relay can
+        render it; email is skipped entirely. "both" keeps the legacy
+        behaviour (email + plain JSON webhook).
 
         Args:
             alert_type: Type of alert (e.g., "high_risk", "remediation", "prediction")
@@ -319,30 +347,47 @@ class NotificationManager:
         """
         timestamp = _utc_now()
 
-        # Email
-        subject = f"{alert_type}: {pod_name}"
-        body = (
-            f"Predictive-Agent Alert\n"
-            f"=======================\n\n"
-            f"Timestamp: {timestamp}\n"
-            f"Alert Type: {alert_type}\n"
-            f"Pod: {pod_name}\n"
-            f"Risk Score: {risk_score:.1f}\n"
-            f"Action Taken: {action_taken}\n"
-            f"Details: {details}\n"
-        )
-        email_sent = self.email.send(subject, body)
+        channel = self.channel
+        email_sent = False
+        webhook_sent = False
 
-        # Webhook
-        payload = {
-            "alert_type": alert_type,
-            "pod_name": pod_name,
-            "risk_score": risk_score,
-            "action_taken": action_taken,
-            "details": details,
-            "timestamp": timestamp,
-        }
-        webhook_sent = self.webhook.send(payload)
+        if channel in ("email", "both"):
+            # Email
+            subject = f"{alert_type}: {pod_name}"
+            body = (
+                f"Predictive-Agent Alert\n"
+                f"=======================\n\n"
+                f"Timestamp: {timestamp}\n"
+                f"Alert Type: {alert_type}\n"
+                f"Pod: {pod_name}\n"
+                f"Risk Score: {risk_score:.1f}\n"
+                f"Action Taken: {action_taken}\n"
+                f"Details: {details}\n"
+            )
+            email_sent = self.email.send(subject, body)
+
+        if channel in ("matrix", "both", "webhook"):
+            if channel == "both":
+                # Legacy plain JSON webhook payload
+                payload = {
+                    "alert_type": alert_type,
+                    "pod_name": pod_name,
+                    "risk_score": risk_score,
+                    "action_taken": action_taken,
+                    "details": details,
+                    "timestamp": timestamp,
+                }
+            else:
+                # Default: Alertmanager v4 schema for the matrix alertbridge.
+                payload = build_alertmanager_payload(
+                    alert_type=alert_type,
+                    pod_name=pod_name,
+                    risk_score=risk_score,
+                    action_taken=action_taken,
+                    details=details,
+                    status="firing",
+                )
+            webhook_sent = self.webhook.send(payload)
 
         # Record in history
         self.history.append(
@@ -354,6 +399,7 @@ class NotificationManager:
                 "action_taken": action_taken,
                 "email_sent": email_sent,
                 "webhook_sent": webhook_sent,
+                "channel": channel,
             }
         )
 
@@ -442,4 +488,6 @@ def create_notifier_from_config() -> NotificationManager:
         timeout=int(os.environ.get("WEBHOOK_TIMEOUT", "10")),
     )
 
-    return NotificationManager(email_notifier=email, webhook_notifier=webhook)
+    return NotificationManager(
+        email_notifier=email, webhook_notifier=webhook, channel=os.environ.get("NOTIFY_CHANNEL", "matrix")
+    )

@@ -263,7 +263,7 @@ class TestFullRemediationCycle:
         email.send.return_value = True
         webhook = MagicMock(spec=WebhookNotifier)
         webhook.send.return_value = True
-        notifier = NotificationManager(email_notifier=email, webhook_notifier=webhook)
+        notifier = NotificationManager(email_notifier=email, webhook_notifier=webhook, channel="both")
 
         # Simulate a remediation result
         result = RemediationResult(

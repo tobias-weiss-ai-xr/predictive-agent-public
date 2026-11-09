@@ -207,16 +207,27 @@ class TestWebhookNotifier:
 class TestNotificationManager:
     """Test NotificationManager."""
 
-    def _make_manager(self):
+    def _make_manager(self, channel="matrix"):
         email = MagicMock(spec=EmailNotifier)
         email.send.return_value = True
         webhook = MagicMock(spec=WebhookNotifier)
         webhook.send.return_value = True
-        return NotificationManager(email_notifier=email, webhook_notifier=webhook), email, webhook
+        return NotificationManager(email_notifier=email, webhook_notifier=webhook, channel=channel), email, webhook
 
-    def test_notify_calls_both(self):
-        """Test that notify() calls both email and webhook."""
+    def test_notify_default_matrix_only(self):
+        """Default channel is matrix: webhook only, no email."""
         manager, email, webhook = self._make_manager()
+        email_sent, webhook_sent = manager.notify(
+            "high_risk", "api-server-abc", 85.5, "pod_restart", "Pod in CrashLoopBackOff"
+        )
+        assert email_sent is False
+        assert webhook_sent is True
+        email.send.assert_not_called()
+        webhook.send.assert_called_once()
+
+    def test_notify_both_channels(self):
+        """channel=both sends email AND webhook (legacy behaviour)."""
+        manager, email, webhook = self._make_manager(channel="both")
         email_sent, webhook_sent = manager.notify(
             "high_risk", "api-server-abc", 85.5, "pod_restart", "Pod in CrashLoopBackOff"
         )
@@ -225,9 +236,27 @@ class TestNotificationManager:
         email.send.assert_called_once()
         webhook.send.assert_called_once()
 
+    def test_notify_email_channel_only(self):
+        """channel=email sends email only, no webhook."""
+        manager, email, webhook = self._make_manager(channel="email")
+        email_sent, webhook_sent = manager.notify("high_risk", "pod-1", 90.0, "node_cordon")
+        assert email_sent is True
+        assert webhook_sent is False
+        webhook.send.assert_not_called()
+
+    def test_notify_none_channel(self):
+        """channel=none records history but delivers nothing."""
+        manager, email, webhook = self._make_manager(channel="none")
+        email_sent, webhook_sent = manager.notify("high_risk", "pod-1", 90.0, "action")
+        assert email_sent is False
+        assert webhook_sent is False
+        email.send.assert_not_called()
+        webhook.send.assert_not_called()
+        assert len(manager.history) == 1
+
     def test_notify_email_subject(self):
         """Test that email subject contains alert type and pod name."""
-        manager, email, webhook = self._make_manager()
+        manager, email, webhook = self._make_manager(channel="both")
         manager.notify("remediation", "pod-1", 90.0, "node_cordon")
         call_args = email.send.call_args
         subject = call_args[0][0]
@@ -236,7 +265,7 @@ class TestNotificationManager:
 
     def test_notify_email_body_contains_details(self):
         """Test that email body contains all alert details."""
-        manager, email, webhook = self._make_manager()
+        manager, email, webhook = self._make_manager(channel="both")
         manager.notify("high_risk", "api-server", 85.5, "pod_restart", "CrashLoopBackOff")
         call_args = email.send.call_args
         body = call_args[0][1]
@@ -245,9 +274,21 @@ class TestNotificationManager:
         assert "pod_restart" in body
         assert "CrashLoopBackOff" in body
 
-    def test_notify_webhook_payload(self):
-        """Test that webhook payload contains all fields."""
+    def test_notify_webhook_payload_alertmanager(self):
+        """Default matrix channel sends an Alertmanager v4 payload."""
         manager, email, webhook = self._make_manager()
+        manager.notify("high_risk", "api-server", 85.5, "pod_restart", "details")
+        call_args = webhook.send.call_args
+        payload = call_args[0][0]
+        assert "alerts" in payload
+        alert = payload["alerts"][0]
+        assert alert["labels"]["alertname"] == "high_risk"
+        assert alert["labels"]["pod"] == "api-server"
+        assert alert["status"] == "firing"
+
+    def test_notify_webhook_payload_legacy(self):
+        """channel=both keeps the legacy plain JSON webhook payload."""
+        manager, email, webhook = self._make_manager(channel="both")
         manager.notify("high_risk", "api-server", 85.5, "pod_restart", "details")
         call_args = webhook.send.call_args
         payload = call_args[0][0]
@@ -277,12 +318,12 @@ class TestNotificationManager:
         assert len(history) == 100
 
     def test_notify_email_failure(self):
-        """Test that email failure is recorded."""
+        """Test that email failure is recorded (channel=both)."""
         email = MagicMock(spec=EmailNotifier)
         email.send.return_value = False
         webhook = MagicMock(spec=WebhookNotifier)
         webhook.send.return_value = True
-        manager = NotificationManager(email_notifier=email, webhook_notifier=webhook)
+        manager = NotificationManager(email_notifier=email, webhook_notifier=webhook, channel="both")
         email_sent, webhook_sent = manager.notify("alert", "pod-1", 80.0, "action")
         assert email_sent is False
         assert webhook_sent is True

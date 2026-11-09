@@ -263,3 +263,6 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 WEBHOOK_TIMEOUT = int(os.environ.get("WEBHOOK_TIMEOUT", "10"))
+# Default alert channel: "matrix" (webhook in Alertmanager v4 schema),
+# or "email", "both", "none".
+NOTIFY_CHANNEL = os.environ.get("NOTIFY_CHANNEL", "matrix").lower()
