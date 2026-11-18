@@ -50,6 +50,34 @@ def test_metrics(test_server):
         assert "predictive_agent" in text
 
 
+def test_alerts_lazy_feed_from_config(test_server):
+    """Server builds a config-driven AlertFeed when main never wired one.
+
+    Guards against start-ordering regressions: the API must come alive even
+    when ``main._alert_feed`` is still the module-level None.
+    """
+    import predictive_agent.main as main
+    from predictive_agent.server import _context
+
+    old_feed = main._alert_feed
+    old_ctx = _context.alert_feed
+    main._alert_feed = None
+    _context.alert_feed = None
+    try:
+        with patch("predictive_agent.server.config.ALERT_FEED_ENABLED", True):
+            with urllib.request.urlopen(
+                "http://localhost:18080/alerts"
+            ) as resp:
+                data = json.loads(resp.read().decode())
+                assert data["enabled"] is True
+            # lazy feed is now cached into module + context
+            assert main._alert_feed is not None
+            assert _context.alert_feed is main._alert_feed
+    finally:
+        main._alert_feed = old_feed
+        _context.alert_feed = old_ctx
+
+
 def test_alerts_and_ceph_late_init(test_server):
     """Server resolves the AlertFeed lazily from main._alert_feed.
 

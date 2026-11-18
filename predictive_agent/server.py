@@ -9,6 +9,7 @@ empty defaults so the server always responds correctly.
 """
 
 import json
+import logging
 import socketserver
 import threading
 import time
@@ -17,6 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from predictive_agent import config, main
+
+logger = logging.getLogger(__name__)
 from predictive_agent.benchmark import run_benchmark, scenarios_from_backtester
 from predictive_agent.collector import (
     COLLECTOR_STATE_DEGRADED,
@@ -968,15 +971,31 @@ class RequestHandler(BaseHTTPRequestHandler):
     def _current_feed(self):
         """Resolve the AlertFeed, preferring the live module attribute.
 
-        The server is started right after ``main()`` wires ``_alert_feed``, but
-        every code path that snapshots the feed into ``_context`` earlier ends
-        up with None. Reading the module attribute at request time keeps
-        /alerts + /ceph-health correct regardless of start ordering.
+        The server may be queried before/without ``main()`` having wired its
+        module-level ``_alert_feed``. Fall back to a lazy AlertFeed built from
+        config (idempotent: cached into both the module and the context) so
+        /alerts and /ceph-health report accurate state whenever
+        ALERT_FEED_ENABLED is on.
         """
         feed = getattr(main, "_alert_feed", None)
         if feed is None:
             feed = _context.alert_feed
-        elif feed is not _context.alert_feed:
+        if feed is None and config.ALERT_FEED_ENABLED:
+            from predictive_agent.alerts_feed import AlertFeed
+
+            feed = AlertFeed(
+                alertmanager_url=config.ALERTMANAGER_URL,
+                prometheus_url=config.PROMETHEUS_URL,
+                prometheus_user=config.PROMETHEUS_BASIC_AUTH_USER,
+                prometheus_pass=config.PROMETHEUS_BASIC_AUTH_PASS,
+                timeout_s=config.ALERT_FEED_TIMEOUT_S,
+                boost=config.ALERT_FEED_RISK_BOOST,
+                ceph_watch=config.CEPH_WATCH_ENABLED,
+            )
+            logger.info("AlertWatch: lazily created feed from config")
+            main._alert_feed = feed
+            _context.alert_feed = feed
+        elif feed is not None and feed is not _context.alert_feed:
             _context.alert_feed = feed  # keep the context snapshot in sync
         return feed
 
@@ -984,13 +1003,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         # GET /alerts — AlertWatch active-alert correlation state
         feed = self._current_feed()
         if feed is None:
-            logger.warning(
-                "AlertWatch disabled at request time: module feed=%r ctx feed=%r "
-                "flag=%s",
-                getattr(main, "_alert_feed", "<missing>"),
-                _context.alert_feed,
-                config.ALERT_FEED_ENABLED,
-            )
             return {"enabled": False, "message": "AlertWatch not enabled (ALERT_FEED_ENABLED=0)"}
         return {
             "enabled": True,
