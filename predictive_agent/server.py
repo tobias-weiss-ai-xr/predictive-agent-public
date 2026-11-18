@@ -966,24 +966,31 @@ class RequestHandler(BaseHTTPRequestHandler):
         return engine.get_stats()
 
     def _current_feed(self):
-        """Resolve the AlertFeed, refreshing the context reference lazily.
+        """Resolve the AlertFeed, preferring the live module attribute.
 
-        The server is started before ``main()`` initialises ``_alert_feed``, so
-        the context snapshot at startup is None. Reading the module attribute
-        at request time keeps /alerts + /ceph-health correct regardless of
-        start ordering.
+        The server is started right after ``main()`` wires ``_alert_feed``, but
+        every code path that snapshots the feed into ``_context`` earlier ends
+        up with None. Reading the module attribute at request time keeps
+        /alerts + /ceph-health correct regardless of start ordering.
         """
-        feed = _context.alert_feed
+        feed = getattr(main, "_alert_feed", None)
         if feed is None:
-            feed = getattr(main, "_alert_feed", None)
-            if feed is not None:
-                _context.alert_feed = feed
+            feed = _context.alert_feed
+        elif feed is not _context.alert_feed:
+            _context.alert_feed = feed  # keep the context snapshot in sync
         return feed
 
     def _alerts_dict(self):
         # GET /alerts — AlertWatch active-alert correlation state
         feed = self._current_feed()
         if feed is None:
+            logger.warning(
+                "AlertWatch disabled at request time: module feed=%r ctx feed=%r "
+                "flag=%s",
+                getattr(main, "_alert_feed", "<missing>"),
+                _context.alert_feed,
+                config.ALERT_FEED_ENABLED,
+            )
             return {"enabled": False, "message": "AlertWatch not enabled (ALERT_FEED_ENABLED=0)"}
         return {
             "enabled": True,
