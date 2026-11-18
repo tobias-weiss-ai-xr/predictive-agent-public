@@ -182,6 +182,11 @@ sha256 digest** at the artifact produced by the in-cluster nix-builder
 the running Deployment image) — so FixImage now corrects image drift to the
 deterministic in-cluster artifact instead of an upstream re-tag.
 
+The nix-builder recipe sources are fully public: the operator image from
+`tobias-weiss-ai-xr/predictive-agent-public`, the FixImage target images from
+`tobias-weiss-ai-xr/openEduSuite-nix-public` (image recipes only, no infra;
+no Codeberg, no SSH keys, no HRZ GitLab).
+
 Both pipelines need the allowlisted target tag to already exist in the
 registry. The in-cluster builder uses the **public** repo, so its artifact may
 differ slightly from a private-repo build — tag accordingly and point
