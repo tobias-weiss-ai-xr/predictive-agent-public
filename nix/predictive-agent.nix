@@ -7,7 +7,7 @@
 # Healthcheck: curl /healthz and /ready on the health-probe port (default 8081)
 #
 # Based on the v3.1 nix build at:
-#   opendesk-nix/nix/images/dev-agent.nix
+#   openedusuite-nix/nix/images/dev-agent.nix
 # adapted for the v4.0 stdlib-only Python package layout (predictive_agent/).
 
 { pkgs ? import <nixpkgs> { system = "x86_64-linux"; } }:
@@ -55,10 +55,10 @@ let
   etcFiles = pkgs.runCommand "predictive-agent-etc" {} ''
     mkdir -p $out/etc
     echo 'root:x:0:0:root:/root:/bin/bash' > $out/etc/passwd
-    echo 'opendesk:x:1000:1000:opendesk:/home/opendesk:/bin/bash' >> $out/etc/passwd
+    echo 'predictive-agent:x:1000:1000:predictive-agent:/home/predictive-agent:/bin/bash' >> $out/etc/passwd
     echo 'nobody:x:65534:65534:nobody:/:/sbin/nologin' >> $out/etc/passwd
     echo 'root:x:0:' > $out/etc/group
-    echo 'opendesk:x:1000:' >> $out/etc/group
+    echo 'predictive-agent:x:1000:' >> $out/etc/group
     echo 'nobody:x:65534:' >> $out/etc/group
   '';
 
@@ -94,9 +94,9 @@ pkgs.dockerTools.buildLayeredImage {
     Cmd = [];
     Env = [
       "OPERATOR_VERSION=4.0.8.1"
-      "OPERATOR_NAME=opendesk-predictive-agent"
-      "OPERATOR_NAMESPACE=opendesk-predictive-agent"
-      "OPERATOR_WATCH_NAMESPACES=opendesk,opendesk-edu,default,llm"
+      "OPERATOR_NAME=predictive-agent"
+      "OPERATOR_NAMESPACE=predictive-agent"
+      "OPERATOR_WATCH_NAMESPACES=openedusuite,default,llm"
       "COLLECTOR_MODE=kubectl"
       "LLM_BACKEND=ollama"
       "OLLAMA_URL=http://ollama.llm.svc.cluster.local:11434"
@@ -110,7 +110,7 @@ pkgs.dockerTools.buildLayeredImage {
       "REMEDIATION_MAX_PER_HOUR=50"
       "REMEDIATION_COOLDOWN_S=300"
       "REMEDIATION_RISK_THRESHOLD=0.7"
-      "REMEDIATION_PROTECTED_NS=kube-system,opendesk-predictive-agent"
+      "REMEDIATION_PROTECTED_NS=kube-system,predictive-agent"
       "ALERT_EMAIL_TO=alerts@example.com"
       "SMTP_HOST=smtp.example.com"
       "SMTP_PORT=587"
@@ -121,7 +121,7 @@ pkgs.dockerTools.buildLayeredImage {
       "PREDICTION_BASE_RISK=0.15"
       "PATH=${pkgs.python3}/bin:${pkgs.curl}/bin:${pkgs.bash}/bin:${pkgs.docker-client}/bin:${pkgs.coreutils}/bin:${pkgs.gnugrep}/bin:${pkgs.gnused}/bin:${pkgs.procps}/bin:${pkgs.kubectl}/bin"
       "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-      "HOME=/home/opendesk"
+      "HOME=/home/predictive-agent"
     ];
     ExposedPorts = {
       "8080/tcp" = {};

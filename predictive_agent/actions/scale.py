@@ -53,7 +53,7 @@ class DeploymentScaleAction(RemediationAction):
             return False
 
         namespace = getattr(pod_state, "namespace", "")
-        if namespace in {"kube-system", "opendesk-predictive-agent"}:
+        if namespace in {"kube-system", "predictive-agent"}:
             return False
 
         cpu_pct = getattr(pod_state, "cpu_pct", 0)

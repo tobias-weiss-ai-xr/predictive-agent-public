@@ -2,7 +2,7 @@ schema: spec-driven
 
 # Project context — shown to AI when creating artifacts.
 context: |
-  Project: openDesk Predictive Agent v4.0 — a predictive health-monitoring
+  Project: Predictive Agent v4.1.0 — a predictive health-monitoring
   operator for Kubernetes and Docker. Shifts from reactive (detect crash →
   analyze) to predictive (detect trends → predict failure → warn before crash).
 

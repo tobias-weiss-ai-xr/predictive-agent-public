@@ -189,8 +189,8 @@ class TestServerRemediationEndpoints:
         import urllib.request
         with urllib.request.urlopen("http://127.0.0.1:18120/metrics") as resp:
             text = resp.read().decode()
-        assert "opendesk_predictive_agent_remediation_actions_total" in text
-        assert "opendesk_predictive_agent_remediation_dry_run_total" in text
+        assert "predictive_agent_remediation_actions_total" in text
+        assert "predictive_agent_remediation_dry_run_total" in text
 
     def test_metrics_without_remediation(self):
         """Test that /metrics works without remediation manager."""
@@ -206,9 +206,9 @@ class TestServerRemediationEndpoints:
             with urllib.request.urlopen("http://127.0.0.1:18124/metrics") as resp:
                 text = resp.read().decode()
             # Should still have basic metrics
-            assert "opendesk_predictive_agent_pods_tracked" in text
+            assert "predictive_agent_pods_tracked" in text
             # Should NOT have remediation metrics
-            assert "opendesk_predictive_agent_remediation_actions_total" not in text
+            assert "predictive_agent_remediation_actions_total" not in text
         finally:
             server.shutdown()
             _context.remediation_manager = saved_rem

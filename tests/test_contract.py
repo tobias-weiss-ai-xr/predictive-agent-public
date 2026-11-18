@@ -8,7 +8,7 @@ these tests break, alerting developers to breaking changes.
 Covers:
 - /healthz: 200, {"status": "ok"}, always available
 - /ready: 200, {"status": "ready"/"not_ready"}, depends on state
-- /metrics: 200, text/plain, Prometheus format (opendesk_predictive_agent_* metrics)
+- /metrics: 200, text/plain, Prometheus format (predictive_agent_* metrics)
 - /status: 200, application/json, specific fields
 - /predictions: 200, application/json, array of predictions with required fields
 - /state: 200, application/json, pods dict with PodTracker fields
@@ -125,22 +125,22 @@ class TestMetricsContract:
     def test_has_prometheus_metrics(self, contract_server):
         with urllib.request.urlopen("http://localhost:18100/metrics") as resp:
             text = resp.read().decode()
-            assert "opendesk_predictive_agent_" in text
+            assert "predictive_agent_" in text
 
     def test_has_pods_tracked_metric(self, contract_server):
         with urllib.request.urlopen("http://localhost:18100/metrics") as resp:
             text = resp.read().decode()
-            assert "opendesk_predictive_agent_pods_tracked" in text
+            assert "predictive_agent_pods_tracked" in text
 
     def test_has_predictions_count_metric(self, contract_server):
         with urllib.request.urlopen("http://localhost:18100/metrics") as resp:
             text = resp.read().decode()
-            assert "opendesk_predictive_agent_predictions_count" in text
+            assert "predictive_agent_predictions_count" in text
 
     def test_has_risk_score_metric(self, contract_server):
         with urllib.request.urlopen("http://localhost:18100/metrics") as resp:
             text = resp.read().decode()
-            assert "opendesk_predictive_agent_pod_risk_score" in text
+            assert "predictive_agent_pod_risk_score" in text
 
     def test_metrics_are_numeric(self, contract_server):
         """All metric values should be numeric."""

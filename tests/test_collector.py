@@ -74,13 +74,13 @@ def test_collect_top_metrics():
     """Test collecting metrics from kubectl top pods output."""
     mock_output = """NAMESPACE            NAME                                                  CPU(cores)   MEMORY(bytes)    
 argocd               argocd-application-controller-0                       14m          169Mi            
-opendesk             openldap-0                                           17m          124Mi            
+openedusuite             openldap-0                                           17m          124Mi            
 """
     metrics = collect_top_metrics(mock_output)
     assert "argocd/argocd-application-controller-0" in metrics
     assert metrics["argocd/argocd-application-controller-0"]["cpu_m"] == 14
     assert metrics["argocd/argocd-application-controller-0"]["memory_mib"] == 169
-    assert "opendesk/openldap-0" in metrics
+    assert "openedusuite/openldap-0" in metrics
 
 
 def test_collect_top_metrics_empty():

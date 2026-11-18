@@ -44,7 +44,7 @@ class TestScaleShouldExecute:
 
     def test_protected_namespace_agent(self):
         action = DeploymentScaleAction()
-        pod = self._make_pod_state(cpu_pct=85, data_points=10, namespace="opendesk-predictive-agent")
+        pod = self._make_pod_state(cpu_pct=85, data_points=10, namespace="predictive-agent")
         assert action.should_execute(pod, None, 0.8) is False
 
     def test_exact_high_threshold(self):
@@ -169,13 +169,13 @@ class TestScaleExecute:
     def test_execute_correct_namespace(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="scaled", stderr="")
         action = DeploymentScaleAction()
-        ctx = ActionContext(namespace="opendesk", dry_run=False)
+        ctx = ActionContext(namespace="openedusuite", dry_run=False)
         ctx.scale_direction = "up"
         ctx.current_replicas = 2
         action.execute("app-deployment", ctx)
         cmd = mock_run.call_args[0][0]
         assert "-n" in cmd
-        assert "opendesk" in cmd
+        assert "openedusuite" in cmd
 
     @patch("predictive_agent.actions.scale.subprocess.run")
     def test_execute_timeout_30s(self, mock_run):

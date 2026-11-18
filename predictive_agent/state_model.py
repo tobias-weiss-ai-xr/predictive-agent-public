@@ -129,6 +129,7 @@ class PodTracker:
         self.restart_count = 0
         self.log_errors = 0
         self.node_pressure = False
+        self.node_disk_pressure = False
         # Closed loop (canary widening): scale of the workload this tracker's
         # action targets (deployment replicas when known, else 1). Canary-capable
         # actions only run two-leg (slice → verify → widen) when replicas > 1.
@@ -139,7 +140,7 @@ class PodTracker:
         self.cpu_anomaly_score = 0.0
         self._created_at = None  # set on first update
 
-    def update(self, memory_mib, memory_limit_mib, cpu_m, restart_count, log_errors, node_pressure):
+    def update(self, memory_mib, memory_limit_mib, cpu_m, restart_count, log_errors, node_pressure, node_disk_pressure=False):
         """Update pod metrics and Kalman filters."""
         if self._created_at is None:
             self._created_at = datetime.now(timezone.utc)
@@ -149,6 +150,7 @@ class PodTracker:
         self.restart_count = restart_count
         self.log_errors = log_errors
         self.node_pressure = node_pressure
+        self.node_disk_pressure = node_disk_pressure
 
         # Update Kalman filters
         self.kalman_memory.update(memory_mib)
@@ -256,7 +258,8 @@ class StateModel:
             return dict(self.pods)
 
     def update_pod(self, namespace, name, memory_mib, memory_limit_mib, cpu_m,
-                   restart_count, log_errors, node_pressure, node_name="", created_at=None):
+                   restart_count, log_errors, node_pressure, node_disk_pressure=False,
+                   node_name="", created_at=None):
         """Update pod metrics and return the tracker.
 
         Records Markov chain state transitions when the pod's state changes.
@@ -281,7 +284,8 @@ class StateModel:
             cpu_m=cpu_m,
             restart_count=restart_count,
             log_errors=log_errors,
-            node_pressure=node_pressure
+            node_pressure=node_pressure,
+            node_disk_pressure=node_disk_pressure,
         )
         # Record Markov transition when state changes
         if tracker.state != prev_state:
@@ -305,6 +309,7 @@ class StateModel:
                 "restart_count": pod.restart_count,
                 "log_errors": pod.log_errors,
                 "node_pressure": pod.node_pressure,
+                "node_disk_pressure": pod.node_disk_pressure,
                 "memory_anomaly_score": pod.memory_anomaly_score,
                 "cpu_anomaly_score": pod.cpu_anomaly_score,
                 "node_name": pod.node_name,
@@ -329,6 +334,7 @@ class StateModel:
                 tracker.restart_count = pod_data["restart_count"]
                 tracker.log_errors = pod_data["log_errors"]
                 tracker.node_pressure = pod_data["node_pressure"]
+                tracker.node_disk_pressure = pod_data.get("node_disk_pressure", False)
                 tracker.memory_anomaly_score = pod_data.get("memory_anomaly_score", 0.0)
                 tracker.cpu_anomaly_score = pod_data.get("cpu_anomaly_score", 0.0)
                 tracker.node_name = pod_data.get("node_name", "")

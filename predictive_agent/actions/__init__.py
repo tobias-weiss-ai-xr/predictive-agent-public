@@ -8,10 +8,16 @@ Each module implements one remediation action:
 - scale: Scale deployments up/down based on resource pressure
 - tune_resources: Auto-tune deployment resource limits
 - container_restart: Restart Docker containers (Docker runtime only)
+- fix_image: GitOps-aware image-drift fix for migration/image crash loops
+  (kubectl set image or ArgoCD-source manifest edit + git commit/push)
+- node_gc: Node disk-pressure GC (docker prune on host, else cordon + 
+  operator instruction)
 """
 
 from predictive_agent.actions.container_restart import ContainerRestartAction
+from predictive_agent.actions.fix_image import FixImageAction
 from predictive_agent.actions.node_cordon import NodeCordonAction
+from predictive_agent.actions.node_gc import NodeDiskGCAction
 from predictive_agent.actions.pod_restart import PodRestartAction
 from predictive_agent.actions.right_size import RightSizeAction
 from predictive_agent.actions.rollout_restart import RolloutRestartAction
@@ -26,4 +32,6 @@ __all__ = [
     "DeploymentScaleAction",
     "ResourceTunerAction",
     "ContainerRestartAction",
+    "FixImageAction",
+    "NodeDiskGCAction",
 ]

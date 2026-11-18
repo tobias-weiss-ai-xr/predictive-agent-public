@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# openDesk Predictive Agent v4.0 — container healthcheck
+# Predictive Agent v4.1.0 — container healthcheck
 # Probes the HTTP health server (default port 8081).
 #   liveness  -> GET /healthz
 #   readiness -> GET /ready

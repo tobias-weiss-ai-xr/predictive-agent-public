@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""openDesk Predictive Agent v4.0 — Reconcile loop.
+"""Predictive Agent v4.1.0 — Reconcile loop.
 
 Collects kubectl metrics, updates Kalman filters and Markov chain state,
 runs Bayesian risk prediction, and persists state to PVC.
@@ -72,6 +72,9 @@ _shadow_harness = None
 _calibration_monitor = None  # type: Optional[object]
 _server = None  # HTTP server handle
 _remediation_manager: Optional[RemediationManager] = None
+# Optional AlertWatch feed (Alertmanager/Prometheus correlation). None when
+# ALERT_FEED_ENABLED=false.
+_alert_feed: Optional[Any] = None
 _notifier: Optional[NotificationManager] = None
 _llm_calls = 0
 _llm_errors = 0
@@ -127,6 +130,7 @@ def _build_context() -> "phases.ReconcileContext":
         llm_in_flight=_llm_in_flight,
         last_plan_notify=_last_plan_notify,
         last_autonomy_notify=_last_autonomy_notify,
+        alert_feed=_alert_feed,
         detect_runtime=detect_runtime,
         discover_docker_containers=discover_docker_containers,
         collect_docker_metrics=_collect_docker_container_metrics,
@@ -182,6 +186,27 @@ def reconcile() -> Dict[str, Any]:
 
     # ─── Detect runtime and collect metrics ────────────────────────────
     collected = phases.collect_metrics(ctx, cycle)
+
+    # AlertWatch: refresh cluster alerts once per cycle and drain Ceph health
+    # transitions to the notifier (opt-in; feed never raises).
+    alert_feed = getattr(ctx, "alert_feed", None)
+    if alert_feed is not None:
+        try:
+            alert_feed.refresh()
+            ceph_evt = alert_feed.ceph_transition_event()
+            if ceph_evt and _notifier is not None:
+                _notifier.notify(
+                    alert_type=ceph_evt.get("kind", "ceph_health"),
+                    pod_name="ceph",
+                    risk_score=0.9 if ceph_evt.get("level") == "error" else 0.6,
+                    action_taken="",
+                    details=(
+                        f"ceph health {ceph_evt.get('status')} "
+                        f"(was {ceph_evt.get('previous')}): {ceph_evt.get('detail', '')}"
+                    ),
+                )
+        except Exception:  # noqa: BLE001 - feed/notify must never break the loop
+            pass
 
     collector_state = collected.collector_state
 
@@ -325,7 +350,7 @@ def main() -> None:
     """Main entry point — initialize state, start server, run reconcile loop."""
     global _state_model, _predictor, _state_store, _server
     global _remediation_manager, _notifier, _kg_client, _backtester, _llm_analyzer
-    global _policy_engine
+    global _policy_engine, _alert_feed
 
     _setup_logging()
     logger.info("=== %s v%s starting ===", config.OPERATOR_NAME, config.OPERATOR_VERSION)
@@ -372,6 +397,28 @@ def main() -> None:
     _kg_client = components.kg_client
     _backtester = components.backtester
     _policy_engine = components.policy_engine
+
+    # AlertWatch feed (opt-in): cluster-alert + Ceph-health correlation.
+    if config.ALERT_FEED_ENABLED:
+        try:
+            from predictive_agent.alerts_feed import AlertFeed
+            _alert_feed = AlertFeed(
+                alertmanager_url=config.ALERTMANAGER_URL,
+                prometheus_url=config.PROMETHEUS_URL,
+                prometheus_user=config.PROMETHEUS_BASIC_AUTH_USER,
+                prometheus_pass=config.PROMETHEUS_BASIC_AUTH_PASS,
+                timeout_s=config.ALERT_FEED_TIMEOUT_S,
+                boost=config.ALERT_FEED_RISK_BOOST,
+                ceph_watch=config.CEPH_WATCH_ENABLED,
+            )
+            logger.info(
+                "AlertWatch enabled: alertmanager=%s prometheus=%s boost=%.2f ceph=%s",
+                config.ALERTMANAGER_URL, config.PROMETHEUS_URL,
+                config.ALERT_FEED_RISK_BOOST, config.CEPH_WATCH_ENABLED,
+            )
+        except Exception as e:  # noqa: BLE001 - never break startup on feed errors
+            logger.warning("AlertWatch init failed: %s", e)
+            _alert_feed = None
     _llm_analyzer = components.llm_analyzer
 
     # Start HTTP server

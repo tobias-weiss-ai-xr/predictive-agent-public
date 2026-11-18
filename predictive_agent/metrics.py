@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Each metric: (name_suffix, prometheus_type, help, value)
 Metric = Tuple[str, str, str, float]
 
-_PREFIX = "opendesk_predictive_agent_"
+_PREFIX = "predictive_agent_"
 
 
 def _learning_volume(rm) -> int:

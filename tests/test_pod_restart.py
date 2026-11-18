@@ -49,7 +49,7 @@ class TestPodRestartShouldExecute:
 
     def test_protected_namespace_agent(self):
         action = PodRestartAction()
-        pod = self._make_pod_state(phase="CrashLoopBackOff", restart_count=10, namespace="opendesk-predictive-agent")
+        pod = self._make_pod_state(phase="CrashLoopBackOff", restart_count=10, namespace="predictive-agent")
         assert action.should_execute(pod, None, 0.8) is False
 
 
@@ -121,11 +121,11 @@ class TestPodRestartExecute:
         """Test that kubectl command uses correct namespace."""
         mock_run.return_value = MagicMock(returncode=0, stdout="deleted", stderr="")
         action = PodRestartAction()
-        ctx = ActionContext(namespace="opendesk", dry_run=True)
+        ctx = ActionContext(namespace="openedusuite", dry_run=True)
         action.execute("pod-1", ctx)
         cmd = mock_run.call_args[0][0]
         assert "-n" in cmd
-        assert "opendesk" in cmd
+        assert "openedusuite" in cmd
 
     @patch("predictive_agent.actions.pod_restart.subprocess.run")
     def test_execute_command_in_result(self, mock_run):

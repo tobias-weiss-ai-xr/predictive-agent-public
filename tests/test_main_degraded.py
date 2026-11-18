@@ -446,10 +446,10 @@ def test_reconcile_count_increments_across_cycles(initialized):
 
 def test_reconcile_skip_namespace_not_tracked(initialized):
     """Pods in the skip list are filtered out and never tracked."""
-    pod_items = {"items": [_make_pod(namespace="opendesk-predictive-agent", name="ignored")]}
+    pod_items = {"items": [_make_pod(namespace="predictive-agent", name="ignored")]}
     with patch.object(
         main_mod, "run_cmd",
-        side_effect=_fake_run_cmd(0, "opendesk-predictive-agent/ignored  10m   32Mi\n"),
+        side_effect=_fake_run_cmd(0, "predictive-agent/ignored  10m   32Mi\n"),
     ), patch.object(main_mod, "_get_pods_json", return_value=pod_items):
         result = main_mod.reconcile()
 

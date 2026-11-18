@@ -57,6 +57,7 @@ class _ServerState:
         "llm_errors",
         "state_saves",
         "remediation_plans",
+        "alert_feed",
     )
 
     def __init__(self):
@@ -77,6 +78,7 @@ class _ServerState:
         self.llm_errors = 0
         self.state_saves = 0
         self.remediation_plans: dict = {}
+        self.alert_feed = None
 
 
 # Default context used when start_server is called without arguments (e.g. the
@@ -200,6 +202,10 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/cost-model":
             data, status = self._cost_model_get()
             self._send_response(data, status=status)
+        elif path == "/alerts":
+            self._send_response(self._alerts_dict())
+        elif path == "/ceph-health":
+            self._send_response(self._ceph_health_dict())
         elif path == "/policy/health":
             self._send_response(self._policy_health())
         elif path == "/policy/stats":
@@ -263,77 +269,77 @@ class RequestHandler(BaseHTTPRequestHandler):
         collector_up = 1 if collector_state == COLLECTOR_STATE_HEALTHY else 0
 
         lines = [
-            "# HELP opendesk_predictive_agent_collector_up Whether metric/pod collection currently succeeds (1=HEALTHY)",
-            "# TYPE opendesk_predictive_agent_collector_up gauge",
-            f"opendesk_predictive_agent_collector_up {collector_up}",
-            "# HELP opendesk_predictive_agent_pods_tracked Number of pods currently tracked",
-            "# TYPE opendesk_predictive_agent_pods_tracked gauge",
-            f"opendesk_predictive_agent_pods_tracked {pods_tracked}",
-            "# HELP opendesk_predictive_agent_pods_at_risk Number of pods at risk (risk >= threshold)",
-            "# TYPE opendesk_predictive_agent_pods_at_risk gauge",
-            f"opendesk_predictive_agent_pods_at_risk {at_risk}",
-            "# HELP opendesk_predictive_agent_predictions_count Number of active predictions",
-            "# TYPE opendesk_predictive_agent_predictions_count gauge",
-            f"opendesk_predictive_agent_predictions_count {predictions_count}",
-            "# HELP opendesk_predictive_agent_risk_score Highest current risk score (0-1)",
-            "# TYPE opendesk_predictive_agent_risk_score gauge",
-            f"opendesk_predictive_agent_risk_score {risk_score}",
-            "# HELP opendesk_predictive_agent_uptime_seconds Uptime in seconds",
-            "# TYPE opendesk_predictive_agent_uptime_seconds gauge",
-            f"opendesk_predictive_agent_uptime_seconds {uptime}",
-            "# HELP opendesk_predictive_agent_reconcile_total Total reconcile cycles",
-            "# TYPE opendesk_predictive_agent_reconcile_total counter",
-            f"opendesk_predictive_agent_reconcile_total {reconcile_count}",
-            "# HELP opendesk_predictive_agent_reconcile_duration_seconds Duration of last reconcile in seconds",
-            "# TYPE opendesk_predictive_agent_reconcile_duration_seconds gauge",
-            f"opendesk_predictive_agent_reconcile_duration_seconds {reconcile_duration}",
-            "# HELP opendesk_predictive_agent_llm_calls_total Total LLM analysis calls",
-            "# TYPE opendesk_predictive_agent_llm_calls_total counter",
-            f"opendesk_predictive_agent_llm_calls_total {llm_calls}",
-            "# HELP opendesk_predictive_agent_llm_errors_total Total LLM analysis errors",
-            "# TYPE opendesk_predictive_agent_llm_errors_total counter",
-            f"opendesk_predictive_agent_llm_errors_total {llm_errors}",
-            "# HELP opendesk_predictive_agent_state_saves_total Total state model saves to disk",
-            "# TYPE opendesk_predictive_agent_state_saves_total counter",
-            f"opendesk_predictive_agent_state_saves_total {state_saves}",
+            "# HELP predictive_agent_collector_up Whether metric/pod collection currently succeeds (1=HEALTHY)",
+            "# TYPE predictive_agent_collector_up gauge",
+            f"predictive_agent_collector_up {collector_up}",
+            "# HELP predictive_agent_pods_tracked Number of pods currently tracked",
+            "# TYPE predictive_agent_pods_tracked gauge",
+            f"predictive_agent_pods_tracked {pods_tracked}",
+            "# HELP predictive_agent_pods_at_risk Number of pods at risk (risk >= threshold)",
+            "# TYPE predictive_agent_pods_at_risk gauge",
+            f"predictive_agent_pods_at_risk {at_risk}",
+            "# HELP predictive_agent_predictions_count Number of active predictions",
+            "# TYPE predictive_agent_predictions_count gauge",
+            f"predictive_agent_predictions_count {predictions_count}",
+            "# HELP predictive_agent_risk_score Highest current risk score (0-1)",
+            "# TYPE predictive_agent_risk_score gauge",
+            f"predictive_agent_risk_score {risk_score}",
+            "# HELP predictive_agent_uptime_seconds Uptime in seconds",
+            "# TYPE predictive_agent_uptime_seconds gauge",
+            f"predictive_agent_uptime_seconds {uptime}",
+            "# HELP predictive_agent_reconcile_total Total reconcile cycles",
+            "# TYPE predictive_agent_reconcile_total counter",
+            f"predictive_agent_reconcile_total {reconcile_count}",
+            "# HELP predictive_agent_reconcile_duration_seconds Duration of last reconcile in seconds",
+            "# TYPE predictive_agent_reconcile_duration_seconds gauge",
+            f"predictive_agent_reconcile_duration_seconds {reconcile_duration}",
+            "# HELP predictive_agent_llm_calls_total Total LLM analysis calls",
+            "# TYPE predictive_agent_llm_calls_total counter",
+            f"predictive_agent_llm_calls_total {llm_calls}",
+            "# HELP predictive_agent_llm_errors_total Total LLM analysis errors",
+            "# TYPE predictive_agent_llm_errors_total counter",
+            f"predictive_agent_llm_errors_total {llm_errors}",
+            "# HELP predictive_agent_state_saves_total Total state model saves to disk",
+            "# TYPE predictive_agent_state_saves_total counter",
+            f"predictive_agent_state_saves_total {state_saves}",
             "# HELP predictive_collector_state Collector state gauge (0=down, 1=degraded, 2=healthy)",
             "# TYPE predictive_collector_state gauge",
             f"predictive_collector_state {get_collector_state_numeric()}",
-            "# HELP opendesk_predictive_agent_pod_risk_score Per-pod risk score (0-1)",
-            "# TYPE opendesk_predictive_agent_pod_risk_score gauge",
+            "# HELP predictive_agent_pod_risk_score Per-pod risk score (0-1)",
+            "# TYPE predictive_agent_pod_risk_score gauge",
         ]
         # Per-pod risk score metrics
         for p in predictions:
             pod_key = p.pod_key if hasattr(p, 'pod_key') else p.get('pod_key', 'unknown')
             risk = p.risk_score if hasattr(p, 'risk_score') else p.get('risk_score', 0)
-            lines.append(f"opendesk_predictive_agent_pod_risk_score{{pod=\"{pod_key}\"}} {risk}")
+            lines.append(f"predictive_agent_pod_risk_score{{pod=\"{pod_key}\"}} {risk}")
         # Risk score histogram
         risk_values = [p.risk_score for p in predictions if hasattr(p, 'risk_score')]
         buckets = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-        lines.append("# HELP opendesk_predictive_agent_risk_score_bucket Distribution of risk scores")
-        lines.append("# TYPE opendesk_predictive_agent_risk_score_bucket histogram")
+        lines.append("# HELP predictive_agent_risk_score_bucket Distribution of risk scores")
+        lines.append("# TYPE predictive_agent_risk_score_bucket histogram")
         for le in buckets:
             count = sum(1 for r in risk_values if r <= le)
-            lines.append(f"opendesk_predictive_agent_risk_score_bucket{{le=\"{le}\"}} {count}")
-        lines.append('opendesk_predictive_agent_risk_score_bucket{le="+Inf"} ' + str(len(risk_values)))
-        lines.append(f"opendesk_predictive_agent_risk_score_sum {sum(risk_values):.4f}")
-        lines.append(f"opendesk_predictive_agent_risk_score_count {len(risk_values)}")
+            lines.append(f"predictive_agent_risk_score_bucket{{le=\"{le}\"}} {count}")
+        lines.append('predictive_agent_risk_score_bucket{le="+Inf"} ' + str(len(risk_values)))
+        lines.append(f"predictive_agent_risk_score_sum {sum(risk_values):.4f}")
+        lines.append(f"predictive_agent_risk_score_count {len(risk_values)}")
         # Per-pod detailed metrics (CPU trend, memory trend, restart count, state, confidence)
         if sm is not None:
-            lines.append("# HELP opendesk_predictive_agent_pod_cpu_trend Per-pod CPU trend (millicores/min)")
-            lines.append("# TYPE opendesk_predictive_agent_pod_cpu_trend gauge")
-            lines.append("# HELP opendesk_predictive_agent_pod_mem_trend Per-pod memory trend (MiB/min)")
-            lines.append("# TYPE opendesk_predictive_agent_pod_mem_trend gauge")
-            lines.append("# HELP opendesk_predictive_agent_pod_restart_count Per-pod restart count")
-            lines.append("# TYPE opendesk_predictive_agent_pod_restart_count gauge")
-            lines.append("# HELP opendesk_predictive_agent_pod_state Per-pod state (0=healthy, 5=failed)")
-            lines.append("# TYPE opendesk_predictive_agent_pod_state gauge")
-            lines.append("# HELP opendesk_predictive_agent_kalman_confidence Per-pod Kalman filter confidence (0-1)")
-            lines.append("# TYPE opendesk_predictive_agent_kalman_confidence gauge")
-            lines.append("# HELP opendesk_predictive_agent_markov_transition Per-pod Markov transition probability")
-            lines.append("# TYPE opendesk_predictive_agent_markov_transition gauge")
-            lines.append("# HELP opendesk_predictive_agent_pod_anomaly_score Per-pod anomaly score (0=normal, >3=anomalous)")
-            lines.append("# TYPE opendesk_predictive_agent_pod_anomaly_score gauge")
+            lines.append("# HELP predictive_agent_pod_cpu_trend Per-pod CPU trend (millicores/min)")
+            lines.append("# TYPE predictive_agent_pod_cpu_trend gauge")
+            lines.append("# HELP predictive_agent_pod_mem_trend Per-pod memory trend (MiB/min)")
+            lines.append("# TYPE predictive_agent_pod_mem_trend gauge")
+            lines.append("# HELP predictive_agent_pod_restart_count Per-pod restart count")
+            lines.append("# TYPE predictive_agent_pod_restart_count gauge")
+            lines.append("# HELP predictive_agent_pod_state Per-pod state (0=healthy, 5=failed)")
+            lines.append("# TYPE predictive_agent_pod_state gauge")
+            lines.append("# HELP predictive_agent_kalman_confidence Per-pod Kalman filter confidence (0-1)")
+            lines.append("# TYPE predictive_agent_kalman_confidence gauge")
+            lines.append("# HELP predictive_agent_markov_transition Per-pod Markov transition probability")
+            lines.append("# TYPE predictive_agent_markov_transition gauge")
+            lines.append("# HELP predictive_agent_pod_anomaly_score Per-pod anomaly score (0=normal, >3=anomalous)")
+            lines.append("# TYPE predictive_agent_pod_anomaly_score gauge")
             for pod_key, tracker in pods_snapshot.items():
                 cpu_trend = getattr(tracker, 'cpu_trend', 0.0) or 0.0
                 mem_trend = getattr(tracker, 'memory_trend', 0.0) or 0.0
@@ -350,30 +356,30 @@ class RequestHandler(BaseHTTPRequestHandler):
                         markov_p = p.markov_p_critical if hasattr(p, 'markov_p_critical') else 0.0
                         anomaly_score = p.anomaly_score if hasattr(p, 'anomaly_score') else 0.0
                         break
-                lines.append(f"opendesk_predictive_agent_pod_cpu_trend{{pod=\"{pod_key}\"}} {cpu_trend}")
-                lines.append(f"opendesk_predictive_agent_pod_mem_trend{{pod=\"{pod_key}\"}} {mem_trend}")
-                lines.append(f"opendesk_predictive_agent_pod_restart_count{{pod=\"{pod_key}\"}} {restart_count}")
-                lines.append(f"opendesk_predictive_agent_pod_state{{pod=\"{pod_key}\"}} {state_num}")
-                lines.append(f"opendesk_predictive_agent_kalman_confidence{{pod=\"{pod_key}\"}} {confidence}")
-                lines.append(f"opendesk_predictive_agent_markov_transition{{pod=\"{pod_key}\"}} {markov_p}")
-                lines.append(f"opendesk_predictive_agent_pod_anomaly_score{{pod=\"{pod_key}\"}} {anomaly_score}")
+                lines.append(f"predictive_agent_pod_cpu_trend{{pod=\"{pod_key}\"}} {cpu_trend}")
+                lines.append(f"predictive_agent_pod_mem_trend{{pod=\"{pod_key}\"}} {mem_trend}")
+                lines.append(f"predictive_agent_pod_restart_count{{pod=\"{pod_key}\"}} {restart_count}")
+                lines.append(f"predictive_agent_pod_state{{pod=\"{pod_key}\"}} {state_num}")
+                lines.append(f"predictive_agent_kalman_confidence{{pod=\"{pod_key}\"}} {confidence}")
+                lines.append(f"predictive_agent_markov_transition{{pod=\"{pod_key}\"}} {markov_p}")
+                lines.append(f"predictive_agent_pod_anomaly_score{{pod=\"{pod_key}\"}} {anomaly_score}")
         # Remediation metrics (REM-8)
         rem = _context.remediation_manager
         if rem is not None:
             stats = rem.get_stats()
             lines.extend([
-                "# HELP opendesk_predictive_agent_remediation_actions_total Total remediation actions",
-                "# TYPE opendesk_predictive_agent_remediation_actions_total counter",
-                f"opendesk_predictive_agent_remediation_actions_total {stats['total_actions']}",
-                "# HELP opendesk_predictive_agent_remediation_successful_total Successful remediation actions",
-                "# TYPE opendesk_predictive_agent_remediation_successful_total counter",
-                f"opendesk_predictive_agent_remediation_successful_total {stats['successful_actions']}",
-                "# HELP opendesk_predictive_agent_remediation_failed_total Failed remediation actions",
-                "# TYPE opendesk_predictive_agent_remediation_failed_total counter",
-                f"opendesk_predictive_agent_remediation_failed_total {stats['failed_actions']}",
-                "# HELP opendesk_predictive_agent_remediation_dry_run_total Dry-run remediation actions",
-                "# TYPE opendesk_predictive_agent_remediation_dry_run_total counter",
-                f"opendesk_predictive_agent_remediation_dry_run_total {stats['dry_run_actions']}",
+                "# HELP predictive_agent_remediation_actions_total Total remediation actions",
+                "# TYPE predictive_agent_remediation_actions_total counter",
+                f"predictive_agent_remediation_actions_total {stats['total_actions']}",
+                "# HELP predictive_agent_remediation_successful_total Successful remediation actions",
+                "# TYPE predictive_agent_remediation_successful_total counter",
+                f"predictive_agent_remediation_successful_total {stats['successful_actions']}",
+                "# HELP predictive_agent_remediation_failed_total Failed remediation actions",
+                "# TYPE predictive_agent_remediation_failed_total counter",
+                f"predictive_agent_remediation_failed_total {stats['failed_actions']}",
+                "# HELP predictive_agent_remediation_dry_run_total Dry-run remediation actions",
+                "# TYPE predictive_agent_remediation_dry_run_total counter",
+                f"predictive_agent_remediation_dry_run_total {stats['dry_run_actions']}",
             ])
             # Binary observability metric: predictive_remediation_total{action, outcome}
             from predictive_agent.remediator import get_remediation_metrics
@@ -959,6 +965,29 @@ class RequestHandler(BaseHTTPRequestHandler):
             return {"status": "disabled", "message": "OPA integration not enabled"}
         return engine.get_stats()
 
+    def _alerts_dict(self):
+        # GET /alerts — AlertWatch active-alert correlation state
+        feed = _context.alert_feed
+        if feed is None:
+            return {"enabled": False, "message": "AlertWatch not enabled (ALERT_FEED_ENABLED=0)"}
+        return {
+            "enabled": True,
+            "active_alerts": feed._active_alerts,
+            "namespaces": sorted(feed._active_namespaces),
+            "boost": feed.boost,
+            "last_fetch": feed.last_alert_fetch,
+        }
+
+    def _ceph_health_dict(self):
+        # GET /ceph-health — Ceph cluster health via Prometheus (ceph_health_status)
+        feed = _context.alert_feed
+        if feed is None:
+            return {"enabled": False, "message": "AlertWatch not enabled (ALERT_FEED_ENABLED=0)"}
+        if not feed.ceph_watch:
+            return {"enabled": False, "message": "CEPH_WATCH_ENABLED=0"}
+        health = feed.fetch_ceph_health()
+        return {"enabled": True, "health": health, "last": feed._last_ceph_status}
+
     def log_message(self, format, *args):
         # Suppress standard logging to keep test output clean
         return
@@ -1017,6 +1046,7 @@ def start_server(metrics_port, health_port, state_model=None, predictor=None,
     _context.history = history if history is not None else []
     _context.remediation_manager = remediation_manager
     _context.notifier = notifier
+    _context.alert_feed = getattr(main, "_alert_feed", None)
     _context.backtester = backtester
     _context.policy_engine = policy_engine
     _context.start_time = time.time()

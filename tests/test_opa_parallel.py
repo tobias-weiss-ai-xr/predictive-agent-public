@@ -176,7 +176,7 @@ class TestOPADataFormats:
     @pytest.mark.parametrize("namespace", [
         'default',
         'kube-system',
-        'opendesk-predictive-agent',
+        'predictive-agent',
         'production',
         'staging'
     ])

@@ -2,7 +2,7 @@
 
 Canary (dry-run against a real Docker host with a custom HISTORY_FILE)
 surfaced that Backtester hardcoded its history path to
-/var/lib/opendesk/backtest-history.jsonl via its own BACKTEST_HISTORY_FILE
+/var/lib/predictive-agent/backtest-history.jsonl via its own BACKTEST_HISTORY_FILE
 default, ignoring the shared HISTORY_FILE knob used by STATE_MODEL_FILE /
 PREDICTIONS_FILE. With a custom HISTORY_FILE the backtester still tried to
 write the system dir and silently dropped records at DEBUG.
@@ -27,7 +27,7 @@ def _dir_without(path):
 
 def test_default_history_derives_from_config_history_file():
     """The default backtester history path must live alongside the shared
-    HISTORY_FILE, NOT a hardcoded /var/lib/opendesk path."""
+    HISTORY_FILE, NOT a hardcoded /var/lib/predictive-agent path."""
     assert os.path.join(
         _dir_without(config.HISTORY_FILE),
         "backtest-history.jsonl",
@@ -36,11 +36,11 @@ def test_default_history_derives_from_config_history_file():
 
 def test_default_history_is_not_hardcoded_system_dir():
     """Regression: the default must respect the configured HISTORY_FILE rather
-    than always writing to /var/lib/opendesk (which caused dropped records and
+    than always writing to /var/lib/predictive-agent (which caused dropped records and
     'Permission denied' when HISTORY_FILE points elsewhere)."""
     # If HISTORY_FILE is not the legacy system location, the default must not be.
-    if not config.HISTORY_FILE.startswith("/var/lib/opendesk"):
-        assert not bt_mod.DEFAULT_HISTORY_FILE.startswith("/var/lib/opendesk/")
+    if not config.HISTORY_FILE.startswith("/var/lib/predictive-agent"):
+        assert not bt_mod.DEFAULT_HISTORY_FILE.startswith("/var/lib/predictive-agent/")
     assert "backtest-history.jsonl" in bt_mod.DEFAULT_HISTORY_FILE
 
 
@@ -86,7 +86,7 @@ def test_write_history_creates_parent_dir(tmp_path):
 
 def test_custom_history_file_without_dir_persists(tmp_path):
     """End-to-end: a fully custom path (like the canary used) must persist a
-    backtest record even though /var/lib/opendesk may be unwritable."""
+    backtest record even though /var/lib/predictive-agent may be unwritable."""
     target = tmp_path / "state" / "alts" / "history.jsonl"
     bt = Backtester(history_file=str(target))
     bt.record_prediction(pod_key="a/b", risk_score=0.5, ttf_minutes=20,

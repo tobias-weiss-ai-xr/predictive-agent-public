@@ -110,11 +110,11 @@ class TestRolloutRestartExecute:
     def test_execute_correct_namespace(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="restarted", stderr="")
         action = RolloutRestartAction()
-        ctx = ActionContext(namespace="opendesk", dry_run=False)
+        ctx = ActionContext(namespace="openedusuite", dry_run=False)
         action.execute("app-deployment", ctx)
         cmd = mock_run.call_args[0][0]
         assert "-n" in cmd
-        assert "opendesk" in cmd
+        assert "openedusuite" in cmd
 
     @patch("predictive_agent.actions.rollout_restart.subprocess.run")
     def test_execute_exception(self, mock_run):

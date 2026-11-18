@@ -1,15 +1,16 @@
 """Configuration for predictive-agent v4.0."""
 
+import json
 import os
 
 # ─── Core ────────────────────────────────────────────────────────────────────
-OPERATOR_NAME = os.environ.get("OPERATOR_NAME", "opendesk-predictive-agent")
-OPERATOR_NAMESPACE = os.environ.get("OPERATOR_NAMESPACE", "opendesk-predictive-agent")
-OPERATOR_VERSION = "4.0.8"
+OPERATOR_NAME = os.environ.get("OPERATOR_NAME", "predictive-agent")
+OPERATOR_NAMESPACE = os.environ.get("OPERATOR_NAMESPACE", "predictive-agent")
+OPERATOR_VERSION = "4.1.0"
 WATCH_NAMESPACES = os.environ.get(
-    "OPERATOR_WATCH_NAMESPACES", "opendesk,opendesk-edu,default,llm"
+    "OPERATOR_WATCH_NAMESPACES", "openedusuite,default,llm"
 ).split(",")
-SKIP_NAMESPACES = {"opendesk-predictive-agent"}
+SKIP_NAMESPACES = {"predictive-agent"}
 
 # ─── LLM Backend ─────────────────────────────────────────────────────────────
 LLM_BACKEND = os.environ.get("LLM_BACKEND", "ollama")  # ollama, saia, openai
@@ -56,9 +57,9 @@ KALMAN_CPU_PROCESS_NOISE = float(os.environ.get("KALMAN_CPU_PROCESS_NOISE", "5.0
 KALMAN_CPU_MEASUREMENT_NOISE = float(os.environ.get("KALMAN_CPU_MEASUREMENT_NOISE", "200.0"))
 
 # ─── Persistence ─────────────────────────────────────────────────────────────
-STATE_MODEL_FILE = os.environ.get("STATE_MODEL_FILE", "/var/lib/opendesk/state-model.json")
-PREDICTIONS_FILE = os.environ.get("PREDICTIONS_FILE", "/var/lib/opendesk/predictions.json")
-HISTORY_FILE = os.environ.get("HISTORY_FILE", "/var/lib/opendesk/analysis-history.json")
+STATE_MODEL_FILE = os.environ.get("STATE_MODEL_FILE", "/var/lib/predictive-agent/state-model.json")
+PREDICTIONS_FILE = os.environ.get("PREDICTIONS_FILE", "/var/lib/predictive-agent/predictions.json")
+HISTORY_FILE = os.environ.get("HISTORY_FILE", "/var/lib/predictive-agent/analysis-history.json")
 HISTORY_MAX = int(os.environ.get("HISTORY_MAX", "100"))
 
 # ─── HTTP ────────────────────────────────────────────────────────────────────
@@ -132,7 +133,7 @@ REMEDIATION_COOLDOWN_S = os.environ.get("REMEDIATION_COOLDOWN_S", "300")
 REMEDIATION_DEDUP_WINDOW = int(os.environ.get("REMEDIATION_DEDUP_WINDOW", "300"))
 REMEDIATION_RISK_THRESHOLD = float(os.environ.get("REMEDIATION_RISK_THRESHOLD", "0.7"))
 REMEDIATION_PROTECTED_NS = os.environ.get(
-    "REMEDIATION_PROTECTED_NS", "kube-system,opendesk-predictive-agent"
+    "REMEDIATION_PROTECTED_NS", "kube-system,predictive-agent"
 )
 
 # ── P6: bounded remediation autonomy ────────────────────────────────────
@@ -266,3 +267,85 @@ WEBHOOK_TIMEOUT = int(os.environ.get("WEBHOOK_TIMEOUT", "10"))
 # Default alert channel: "matrix" (webhook in Alertmanager v4 schema),
 # or "email", "both", "none".
 NOTIFY_CHANNEL = os.environ.get("NOTIFY_CHANNEL", "matrix").lower()
+
+# ─── FixImage — GitOps-aware image-drift remediation ────────────────────
+# Bounded-autonomy image fixes for "restart cannot help" crash loops (version/
+# image drift, e.g. alembic migrations advanced shared state beyond the pinned
+# image's migration chain). The agent NEVER invents an image: it only applies
+# the operator-declared mappings below, and by default only when the pod's
+# recent logs carry a migration/image-drift signature.
+#
+# FIX_IMAGE_TARGETS is a JSON list of maps:
+#   [{"namespace": "llm", "deployment": "open-webui",
+#     "container": "open-webui",
+#     "image": "registry.local/openedusuite-nix/open-webui:v0.13.3-nix",
+#     "mode": "patch"}]
+# mode: "patch"  -> kubectl set image (no GitOps controller in the way)
+#       "gitops" -> edit the manifest in a local ArgoCD source checkout and
+#                    git commit (+ push when FIX_IMAGE_GITOPS_PUSH=true) so
+#                    selfHeal+prune controllers converge to the new image.
+FIX_IMAGE_ENABLED = os.environ.get("FIX_IMAGE_ENABLED", "false").lower() in (
+    "true", "1", "yes"
+)
+FIX_IMAGE_TARGETS = json.loads(os.environ.get("FIX_IMAGE_TARGETS", "[]"))
+FIX_IMAGE_REQUIRE_LOG_SIGNATURE = os.environ.get(
+    "FIX_IMAGE_REQUIRE_LOG_SIGNATURE", "true"
+).lower() in ("true", "1", "yes")
+FIX_IMAGE_LOG_PATTERNS = json.loads(
+    os.environ.get(
+        "FIX_IMAGE_LOG_PATTERNS",
+        '["alembic", "can\'t locate revision", "migration failed", '
+        '"running upgrade", "django.db.migrations", "prisma migrate", '
+        '"knex", "sequelize", "digest mismatch", "manifest unknown", '
+        '"no matching manifest", "image pull"]',
+    )
+)
+FIX_IMAGE_LOG_LINES = int(os.environ.get("FIX_IMAGE_LOG_LINES", "60"))
+FIX_IMAGE_RISK_THRESHOLD = float(os.environ.get("FIX_IMAGE_RISK_THRESHOLD", "0.7"))
+# Local checkout of the ArgoCD/GitOps source repo for mode="gitops".
+FIX_IMAGE_GITOPS_REPO_DIR = os.environ.get("FIX_IMAGE_GITOPS_REPO_DIR", "")
+FIX_IMAGE_GITOPS_MANIFEST = os.environ.get(
+    "FIX_IMAGE_GITOPS_MANIFEST", "k8s/llm/open-webui.yaml"
+)
+FIX_IMAGE_GITOPS_BRANCH = os.environ.get("FIX_IMAGE_GITOPS_BRANCH", "main")
+FIX_IMAGE_GITOPS_PUSH = os.environ.get(
+    "FIX_IMAGE_GITOPS_PUSH", "false"
+).lower() in ("true", "1", "yes")
+FIX_IMAGE_KUBECTL_TIMEOUT_S = float(os.environ.get("FIX_IMAGE_KUBECTL_TIMEOUT_S", "15"))
+
+# ─── NodeGC — node disk-pressure remediation ─────────────────────────────
+# Bounded-autonomy handling of node DiskPressure (evictions, tainted nodes,
+# nodeSelector-pinned workloads that cannot reschedule).
+#   method "kubectl": cordon the pressuring node + emit the exact prune
+#                     instruction (agent has no host access in-cluster).
+#   method "docker": execute `docker system prune` on the node — only valid
+#                     when the agent runs on the node with the docker socket
+#                     (standalone docker runtime); degrades to kubectl path.
+#   method "none":   watch-only (never acts).
+NODE_GC_ENABLED = os.environ.get("NODE_GC_ENABLED", "false").lower() in (
+    "true", "1", "yes"
+)
+NODE_GC_METHOD = os.environ.get("NODE_GC_METHOD", "kubectl").lower()
+NODE_GC_NODES = os.environ.get("NODE_GC_NODES", "")  # comma list; empty = all
+NODE_GC_DOCKER_PRUNE_ARGS = os.environ.get(
+    "NODE_GC_DOCKER_PRUNE_ARGS", "-af"
+)  # never include --volumes
+NODE_GC_TIMEOUT_S = float(os.environ.get("NODE_GC_TIMEOUT_S", "180"))
+NODE_GC_RISK_THRESHOLD = float(os.environ.get("NODE_GC_RISK_THRESHOLD", "0.7"))
+
+# ─── AlertWatch — cluster-alert / storage-health correlation ─────────────
+# Optional watch layer: Alertmanager active alerts boost per-pod risk scores
+# for namespaces with a firing alert; ceph_health_status is surfaced and a
+# WARN/ERR transition produces an alerting event (drained to the notifier).
+ALERT_FEED_ENABLED = os.environ.get("ALERT_FEED_ENABLED", "false").lower() in (
+    "true", "1", "yes"
+)
+ALERTMANAGER_URL = os.environ.get("ALERTMANAGER_URL", "")  # http://alertmanager.monitoring:9093
+PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "")  # http://prometheus.monitoring:9090
+PROMETHEUS_BASIC_AUTH_USER = os.environ.get("PROMETHEUS_BASIC_AUTH_USER", "")
+PROMETHEUS_BASIC_AUTH_PASS = os.environ.get("PROMETHEUS_BASIC_AUTH_PASS", "")
+ALERT_FEED_TIMEOUT_S = float(os.environ.get("ALERT_FEED_TIMEOUT_S", "10"))
+ALERT_FEED_RISK_BOOST = float(os.environ.get("ALERT_FEED_RISK_BOOST", "0.15"))
+CEPH_WATCH_ENABLED = os.environ.get("CEPH_WATCH_ENABLED", "false").lower() in (
+    "true", "1", "yes"
+)

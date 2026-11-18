@@ -92,6 +92,13 @@ def initialize_components(runtime: str, hooks: BootstrapHooks) -> ComponentSet:
     remediation_manager.register_action(RolloutRestartAction())
     remediation_manager.register_action(DeploymentScaleAction())
     remediation_manager.register_action(ResourceTunerAction())
+    # GitOps-aware image-drift fix (REM-FIXIMAGE) + node disk-pressure GC
+    # (REM-NODEGC). Both self-gate via should_execute on their *_ENABLED flags
+    # and operator-declared allowlists, so registering them is always safe.
+    from predictive_agent.actions.fix_image import FixImageAction
+    from predictive_agent.actions.node_gc import NodeDiskGCAction
+    remediation_manager.register_action(FixImageAction())
+    remediation_manager.register_action(NodeDiskGCAction())
     # Register ContainerRestartAction only in Docker runtime
     if runtime == "docker":
         remediation_manager.register_action(ContainerRestartAction())

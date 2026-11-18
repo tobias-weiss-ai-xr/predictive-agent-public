@@ -43,8 +43,8 @@ def test_classify_state_critical():
 
 def test_pod_tracker_creation():
     """Test PodTracker creation."""
-    pt = PodTracker("opendesk", "openldap-0")
-    assert pt.namespace == "opendesk"
+    pt = PodTracker("openedusuite", "openldap-0")
+    assert pt.namespace == "openedusuite"
     assert pt.name == "openldap-0"
     assert pt.state == "HEALTHY"
     assert pt.kalman_memory is not None
@@ -53,7 +53,7 @@ def test_pod_tracker_creation():
 
 def test_pod_tracker_update():
     """Test updating pod metrics."""
-    pt = PodTracker("opendesk", "openldap-0")
+    pt = PodTracker("openedusuite", "openldap-0")
     pt.update(
         memory_mib=500, memory_limit_mib=1024,
         cpu_m=100, restart_count=0, log_errors=0,
@@ -66,7 +66,7 @@ def test_pod_tracker_update():
 
 def test_pod_tracker_state_transition():
     """Test state transitions are tracked."""
-    pt = PodTracker("opendesk", "openldap-0")
+    pt = PodTracker("openedusuite", "openldap-0")
     # Start healthy
     assert pt.state == "HEALTHY"
 
@@ -82,7 +82,7 @@ def test_pod_tracker_state_transition():
 
 def test_pod_tracker_ttf():
     """Test time-to-failure calculation."""
-    pt = PodTracker("opendesk", "openldap-0")
+    pt = PodTracker("openedusuite", "openldap-0")
     # Simulate rising memory
     for mem in [800, 810, 820, 830, 840, 850]:
         pt.update(
@@ -105,17 +105,17 @@ def test_state_model_creation():
 def test_state_model_track_pod():
     """Test tracking a pod in StateModel."""
     sm = StateModel()
-    sm.update_pod("opendesk", "openldap-0",
+    sm.update_pod("openedusuite", "openldap-0",
                    memory_mib=500, memory_limit_mib=1024,
                    cpu_m=100, restart_count=0, log_errors=0,
                    node_pressure=False)
-    assert "opendesk/openldap-0" in sm.pods
+    assert "openedusuite/openldap-0" in sm.pods
 
 
 def test_state_model_persistence():
     """Test StateModel save/load."""
     sm = StateModel()
-    sm.update_pod("opendesk", "openldap-0",
+    sm.update_pod("openedusuite", "openldap-0",
                    memory_mib=500, memory_limit_mib=1024,
                    cpu_m=100, restart_count=0, log_errors=0,
                    node_pressure=False)
@@ -124,7 +124,7 @@ def test_state_model_persistence():
     assert "markov" in data
 
     sm2 = StateModel.from_dict(data)
-    assert "opendesk/openldap-0" in sm2.pods
+    assert "openedusuite/openldap-0" in sm2.pods
 
 
 def test_state_model_markov_learning():

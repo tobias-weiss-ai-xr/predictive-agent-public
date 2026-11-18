@@ -61,7 +61,7 @@ class TestActionContext:
 
     def test_defaults(self):
         ctx = ActionContext()
-        assert ctx.namespace == "opendesk-predictive-agent"
+        assert ctx.namespace == "predictive-agent"
         assert ctx.dry_run is True
         assert ctx.audit_log == []
         assert ctx.cooldowns == {}
@@ -209,7 +209,7 @@ class TestSafetyPolicy:
     def test_default_protected_namespaces(self):
         policy = SafetyPolicy()
         assert "kube-system" in policy.protected_namespaces
-        assert "opendesk-predictive-agent" in policy.protected_namespaces
+        assert "predictive-agent" in policy.protected_namespaces
 
 
 class TestRemediationManager:
@@ -388,15 +388,15 @@ class TestRemediationManager:
 
         pod_state = MagicMock()
         pod_state.name = "mariadb-galera-1"
-        pod_state.namespace = "opendesk"
+        pod_state.namespace = "openedusuite"
         pod_state.node_name = "clrz14-07"
         pod_state.state = "STRESSED"
         pod_state.cpu_trend = 5.0
         pod_state.memory_trend = 2.0
 
         manager.evaluate(pod_state, None, 0.8)
-        assert captured["namespace"] == "opendesk"
-        assert captured["namespace"] != "opendesk-predictive-agent"
+        assert captured["namespace"] == "openedusuite"
+        assert captured["namespace"] != "predictive-agent"
         assert captured["node_name"] == "clrz14-07"
         assert captured["pod_phase"] == "STRESSED"
 
@@ -418,7 +418,7 @@ class TestRemediationManager:
         manager = RemediationManager(risk_threshold=0.7)
         manager.register_action(CaptureAction())
         manager.evaluate(None, None, 0.8)
-        assert captured["namespace"] in ("", "opendesk-predictive-agent")
+        assert captured["namespace"] in ("", "predictive-agent")
 
 
 class TestCreateFromConfig:
@@ -433,7 +433,7 @@ class TestCreateFromConfig:
             "REMEDIATION_MAX_PER_HOUR": "50",
             "REMEDIATION_COOLDOWN_S": "300",
             "REMEDIATION_RISK_THRESHOLD": "0.7",
-            "REMEDIATION_PROTECTED_NS": "kube-system,opendesk-predictive-agent",
+            "REMEDIATION_PROTECTED_NS": "kube-system,predictive-agent",
         }):
             manager = create_remediation_manager_from_config()
             assert manager.dry_run is True
@@ -794,7 +794,8 @@ class TestMutationSurvivorKillers(TestNamedActionSafetyGates):
         assert rec["verify"] == "pending"
         assert rec["leg"] == "full"
         assert rec["snapshot"].keys() == {
-            "state", "memory_pct", "cpu_pct", "restart_count", "log_errors", "node_pressure",
+            "state", "memory_pct", "cpu_pct", "restart_count", "log_errors",
+            "node_pressure", "node_disk_pressure",
         }
 
     def test_execution_record_non_idempotent_action(self):

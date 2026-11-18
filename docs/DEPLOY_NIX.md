@@ -1,7 +1,7 @@
 # Deploying predictive-agent as a Nix container image
 
 The agent is distributed as a reproducible Nix-built OCI image
-(`predictive-agent:v4.0.8-nix`). The image runs the same `predictive_agent.main`
+(`predictive-agent:v4.0.2-nix`). The image runs the same `predictive_agent.main`
 reconcile loop used in Kubernetes, but can also run **Docker-native** (monitor
 and remediate containers on the host Docker daemon via the socket).
 
@@ -32,7 +32,7 @@ and remediate containers on the host Docker daemon via the socket).
 # equivalent to:
 #   nix build .#predictive-agent -o result-image
 #   docker load -i result-image
-docker images | grep predictive-agent   # predictive-agent  v4.0.8-nix
+docker images | grep predictive-agent   # predictive-agent  v4.0.2-nix
 ```
 
 ## Run (Docker-native, recommended for local spin-up)
@@ -55,7 +55,7 @@ docker run --rm -p 8080:8080 -p 8081:8081 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -e OPERATOR_RUNTIME=docker -e LLM_BACKEND=none \
   -e OPERATOR_WATCH_NAMESPACES=predagent \
-  predictive-agent:v4.0.8-nix
+  predictive-agent:v4.0.2-nix
 ```
 
 ### Watching namespaces in Docker mode
@@ -65,16 +65,16 @@ container name (e.g. `predagent-demo-nginx` → namespace `predagent`). Set
 `OPERATOR_WATCH_NAMESPACES` to the compose projects you care about.
 
 ## Run (Kubernetes)
-The kustomized manifests under `k8s/` deploy the agent into the
-`openedusuite` namespace (set in `k8s/kustomization.yaml`). Update the image
-tag in `k8s/deployment.yaml` to `predictive-agent:v4.0.8-nix` (or your registry
-path) and apply with kustomize:
+The existing manifests under `k8s/` deploy the agent into the
+`predictive-agent` namespace. Update the image tag in `k8s/deployment.yaml`
+to `predictive-agent:v4.0.2-nix` (or your registry path) and apply:
 ```bash
-kubectl apply -k k8s/
+kubectl apply -f k8s/namespace.yaml -f k8s/rbac.yaml -f k8s/pvc.yaml \
+  -f k8s/configmap.yaml -f k8s/service.yaml -f k8s/deployment.yaml \
+  -f k8s/servicemonitor.yaml
+# or, to push to a registry and roll out:
+./deploy-updated-version.sh
 ```
-This installs RBAC, PVC, ConfigMap, Deployment, Service and the
-ServiceMonitor. (The Deployment also carries the health/metrics endpoints
-used by the probes.)
 
 ## Reproducible chaos / remediation demo
 
@@ -86,7 +86,7 @@ the `predagent` namespace) will flag it at-risk and restart it:
 # Build + load the image first (see above), then:
 REMEDIATION_DRY_RUN=false docker compose --profile chaos up
 # watch the logs:
-docker logs -f predagent_chaos
+docker logs -f predagent-mac
 # expected (default CRASHLOOP_POLICY=escalate):
 #   Pod docker/predagent_chaos at risk: score=0.99 state=CRITICAL
 #   Remediation: none on docker/predagent_chaos — planner: no beneficial action ...
@@ -108,7 +108,7 @@ demo with `docker compose --profile chaos down`.
 |---|---|---|
 | `OPERATOR_RUNTIME` | `kubectl` | `docker` for Docker-native mode (or leave empty + mount socket) |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | Socket mounted into the container |
-| `OPERATOR_WATCH_NAMESPACES` | `opendesk,opendesk-edu,default,llm` | Comma list; in Docker mode these are compose-project names |
+| `OPERATOR_WATCH_NAMESPACES` | `openedusuite,default,llm` | Comma list; in Docker mode these are compose-project names |
 | `COLLECTOR_MODE` | `kubectl` | Mirrors `OPERATOR_RUNTIME`; auto-detected if unset |
 | `LLM_BACKEND` | `ollama` | `none` for pure predictive/planner mode (no LLM calls) |
 | `PLANNING_ENABLED` | `true` | POMDP planner on by default |

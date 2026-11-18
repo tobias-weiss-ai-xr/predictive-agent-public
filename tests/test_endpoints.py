@@ -52,7 +52,7 @@ def test_health_endpoints(test_server):
     # Test /metrics
     with urllib.request.urlopen("http://localhost:18082/metrics") as resp:
         text = resp.read().decode()
-        assert "opendesk_predictive_agent" in text
+        assert "predictive_agent" in text
 
 
 def test_plan_endpoint(test_server):

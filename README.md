@@ -23,6 +23,13 @@ pure predictive/planner mode.
 - **Pluggable LLM analysis** (async, batched, cached) — Ollama, Saia, OpenAI;
   predictions carry uncertainty + time-to-failure
 - **OPA policy gate (opt-in)** — Rego policy checks gate remediation
+- **Bounded-autonomy remediations** — FixImage (GitOps-aware image/migration-drift
+  fix via declared target mappings + optional log-signature gate) and NodeGC
+  (node DiskPressure: cordon+instruct, or host prune where the agent runs on the
+  node) — all opt-in, allowlisted, reversible where possible
+- **AlertWatch feed (opt-in)** — correlates Alertmanager active alerts (risk
+  boost per namespace) and Ceph health (`ceph_health_status`, WARN/ERR
+  transition events), surfaced via `/alerts` and `/ceph-health`
 - **State persistence** — models and prediction history survive restarts
 
 ## Architecture
@@ -115,6 +122,34 @@ SMTP_USE_TLS=true
 
 The full knob list (behaviour, safety, verify-after-act, calibration, cost
 model) is in the **Operator runbook §3** and `predictive_agent/config.py`.
+
+New in this release (`FIX_IMAGE_*`, `NODE_GC_*`, `ALERT_FEED_*` / `CEPH_WATCH_*`):
+
+```env
+# FixImage — image/migration-drift crash loops (opt-in, pre-declared targets)
+FIX_IMAGE_ENABLED=false
+FIX_IMAGE_TARGETS='[{"namespace":"llm","deployment":"open-webui","container":"open-webui","image":"registry.example.com:5001/.../app:v2","mode":"patch"}]'
+FIX_IMAGE_REQUIRE_LOG_SIGNATURE=true      # act only on a migration/drift log signature
+# mode "gitops" additionally needs a local GitOps checkout:
+# FIX_IMAGE_GITOPS_REPO_DIR, FIX_IMAGE_GITOPS_MANIFEST, FIX_IMAGE_GITOPS_PUSH
+
+# NodeGC — node disk pressure (opt-in)
+NODE_GC_ENABLED=false
+NODE_GC_METHOD=kubectl                    # kubectl (cordon+instruct) | docker | none
+NODE_GC_NODES=                            # comma allowlist; empty = all nodes
+# docker method: NODE_GC_DOCKER_PRUNE_ARGS=-af  (never --volumes)
+
+# AlertWatch — Alertmanager/Prometheus correlation (opt-in)
+ALERT_FEED_ENABLED=false
+ALERTMANAGER_URL=
+PROMETHEUS_URL=
+CEPH_WATCH_ENABLED=false
+# PROMETHEUS_BASIC_AUTH_USER / PROMETHEUS_BASIC_AUTH_PASS for v4 auth'd scrapes
+```
+
+All of these default to **off / empty allowlist** — nothing is invented by the
+agent; it only applies operator-declared mappings and falls back to cordon +
+precise operator instruction when it cannot safely act.
 
 ## Development
 

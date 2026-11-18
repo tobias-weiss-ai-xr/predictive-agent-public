@@ -96,7 +96,7 @@ def _now() -> float:
 class ActionContext:
     """Context passed to every remediation action."""
 
-    namespace: str = "opendesk-predictive-agent"
+    namespace: str = "predictive-agent"
     dry_run: bool = True
     audit_log: list = field(default_factory=list)
     cooldowns: dict = field(default_factory=dict)  # target -> last_action_timestamp
@@ -166,7 +166,7 @@ class SafetyPolicy:
         self.min_healthy_nodes = min_healthy_nodes
         self.protected_namespaces = protected_namespaces or {
             "kube-system",
-            "opendesk-predictive-agent",
+            "predictive-agent",
         }
 
     def can_execute(
@@ -501,7 +501,7 @@ class RemediationManager:
     # ── Closed-loop verification (verify-after-act) ──────────────────────
 
     _STATE_ORDER = {"HEALTHY": 0, "DEGRADED": 1, "RECOVERED": 1, "STRESSED": 2, "CRITICAL": 3, "FAILED": 4}
-    _SIGNAL_NAMES = ("state", "memory_pct", "cpu_pct", "restart_count", "log_errors", "node_pressure")
+    _SIGNAL_NAMES = ("state", "memory_pct", "cpu_pct", "restart_count", "log_errors", "node_pressure", "node_disk_pressure")
 
     @staticmethod
     def _signal_snapshot(pod_state) -> dict:
@@ -525,6 +525,7 @@ class RemediationManager:
 
         state = getattr(pod_state, "state", "")
         pressure = getattr(pod_state, "node_pressure", False)
+        disk_pressure = getattr(pod_state, "node_disk_pressure", False)
         return {
             "state": state if isinstance(state, str) else "",
             "memory_pct": _num(getattr(pod_state, "memory_pct", 0.0)),
@@ -532,6 +533,7 @@ class RemediationManager:
             "restart_count": _int(getattr(pod_state, "restart_count", 0)),
             "log_errors": _int(getattr(pod_state, "log_errors", 0)),
             "node_pressure": pressure is True,
+            "node_disk_pressure": disk_pressure is True,
         }
 
     @classmethod
@@ -556,6 +558,10 @@ class RemediationManager:
         if name == "node_pressure":
             if not recorded:
                 return None  # no pressure recorded → neutral
+            return not bool(current)
+        if name == "node_disk_pressure":
+            if not recorded:
+                return None  # no disk pressure recorded → neutral
             return not bool(current)
         if recorded in (None, 0) or current is None:
             return None
@@ -1823,7 +1829,7 @@ def create_remediation_manager_from_config() -> RemediationManager:
     protected_ns = {
         ns.strip()
         for ns in os.environ.get(
-            "REMEDIATION_PROTECTED_NS", "kube-system,opendesk-predictive-agent"
+            "REMEDIATION_PROTECTED_NS", "kube-system,predictive-agent"
         ).split(",")
         if ns.strip()
     }

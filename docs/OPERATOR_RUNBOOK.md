@@ -27,6 +27,8 @@ pytest tests/test_reconcile_integration.py tests/test_decision_layer_integration
 | `/decision-metrics` | GET | Decision-layer metrics as JSON (#7). |
 | `/remediation-log` | GET | Remediation audit trail (per-row `lifecycle`, incl. held/reverted/canary/widened verdicts). |
 | `/remediation/state` | GET | In-flight verify/hold/canary state; per-entry status, hold remaining, failures (#12). |
+| `/alerts` | GET | AlertWatch: active Alertmanager alerts + watched namespaces (enabled=… shows off-state). |
+| `/ceph-health` | GET | AlertWatch: Ceph health via Prometheus `ceph_health_status` (WARN/ERR → transition event). |
 | `/metrics` | GET | Prometheus scrape format (includes decision metrics) (#7). |
 
 All plans are **execution-ready** but are still gated by `SafetyPolicy` and each

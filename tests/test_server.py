@@ -47,7 +47,7 @@ def test_metrics(test_server):
     """Test /metrics endpoint returns Prometheus format."""
     with urllib.request.urlopen("http://localhost:18080/metrics") as resp:
         text = resp.read().decode()
-        assert "opendesk_predictive_agent" in text
+        assert "predictive_agent" in text
 
 
 def test_status(test_server):

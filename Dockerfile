@@ -4,7 +4,7 @@
 FROM python:3.12-slim
 
 # kubectl is REQUIRED for kubernetes-mode collection (pods, metrics, logs).
-# docker-cli is EQUALLY required for docker-mode collection (the edge-node agent
+# docker-cli is EQUALLY required for docker-mode collection (the legion agent
 # watches Docker containers via /var/run/docker.sock). Shipping the image
 # without a runtime's CLI silently blinds that runtime (0 pods tracked with
 # no warnings) — the incident class this pin exists for. Pinned + sha-verified.
@@ -71,7 +71,7 @@ ENV PYTHONPATH=/opt/predictive-agent \
     OPERATOR_RUNTIME=kubectl \
     COLLECTOR_MODE=kubectl \
     DOCKER_SOCKET=/var/run/docker.sock \
-    OPERATOR_WATCH_NAMESPACES=opendesk,opendesk-edu,default,llm \
+    OPERATOR_WATCH_NAMESPACES=openedusuite,default,llm \
     LLM_BACKEND=ollama \
     RECONCILE_INTERVAL=60 \
     OPERATOR_METRICS_BIND_ADDRESS=0.0.0.0:8080 \

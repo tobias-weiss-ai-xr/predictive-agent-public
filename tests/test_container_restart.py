@@ -48,7 +48,7 @@ class TestContainerRestartShouldExecute:
 
     def test_protected_namespace_agent_blocks(self):
         action = self._make_action()
-        pod = self._make_pod_state(namespace="opendesk-predictive-agent", restart_count=10)
+        pod = self._make_pod_state(namespace="predictive-agent", restart_count=10)
         assert action.should_execute(pod, None, 0.9) is False
 
     def test_risk_at_threshold_boundary_does_not_trigger(self):

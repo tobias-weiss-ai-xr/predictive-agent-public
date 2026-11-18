@@ -112,6 +112,9 @@ class ReconcileContext:
     get_collector_state: Callable[[], str]
     record_successful_collection: Callable[[], None]
     record_collection_failure: Callable[[], None]
+    # Optional AlertWatch feed (Alertmanager/Prometheus correlation). None when
+    # disabled — the per-pod loop and ceph drain guard on it.
+    alert_feed: Any = None
 
 
 @dataclass
@@ -396,6 +399,7 @@ def evaluate_pods(
             memory_mib = getattr(tracker, "memory_mib", 0)
             memory_limit_mib = getattr(tracker, "memory_limit_mib", 0)
             mem_pressure = False  # No node pressure info in degraded mode
+            disk_pressure = False
             pod_phase = "Unknown"
             container_ready = getattr(tracker, "container_ready", True)
             wait_state = None
@@ -433,6 +437,7 @@ def evaluate_pods(
 
             # Docker has no node pressure (single host)
             mem_pressure = False
+            disk_pressure = False
             node_name = "docker-host"
 
             # Pod-style status signals derived from the rich container_info
@@ -486,7 +491,7 @@ def evaluate_pods(
 
             # Get node pressure
             node_name = pod.get("spec", {}).get("nodeName", "")
-            mem_pressure, _disk_pressure = ctx.get_node_pressure(node_conditions, node_name)
+            mem_pressure, disk_pressure = ctx.get_node_pressure(node_conditions, node_name)
 
             # Get pod status signals (phase, container ready, wait state, etc.)
             status_signals = ctx.get_pod_status_signals(pod)
@@ -548,6 +553,7 @@ def evaluate_pods(
                 restart_count=restart_count,
                 log_errors=log_errors,
                 node_pressure=mem_pressure,
+                node_disk_pressure=disk_pressure,
                 node_name=node_name if runtime != "docker" else "docker-host",
                 created_at=pod.get("metadata", {}).get("creationTimestamp", ""),
             )
@@ -601,7 +607,7 @@ def evaluate_pods(
                 restart_rate_per_hr=restart_rate,
                 log_error_rate_per_min=log_error_rate,
                 node_memory_pressure=mem_pressure,
-                node_disk_pressure=False,
+                node_disk_pressure=disk_pressure,
                 markov_state=markov_state,
                 markov_p_critical=markov_p_critical,
                 markov_p_failed=markov_p_failed,
@@ -616,6 +622,18 @@ def evaluate_pods(
                 terminated_reason=terminated_reason,
                 pod_scheduled=pod_scheduled,
             )
+
+            # AlertWatch: a firing cluster alert for this namespace nudges the
+            # risk score up so per-pod signals and Alertmanager agree. The feed
+            # is optional and never raises.
+            alert_feed = getattr(ctx, "alert_feed", None)
+            if alert_feed is not None:
+                try:
+                    boost = alert_feed.pod_boost(ns, name)
+                    if boost > 0:
+                        result.risk_score = min(1.0, result.risk_score + boost)
+                except Exception:  # noqa: BLE001 - feed must never break the loop
+                    pass
 
             if result.risk_score >= ctx.predictor.risk_threshold:
                 at_risk_count += 1

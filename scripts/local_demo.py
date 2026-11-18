@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local, cluster-free demonstration of the POMDP decision layer.
 
-Spins up the real openDesk Predictive Agent HTTP server and drives the full
+Spins up the real Predictive Agent HTTP server and drives the full
 decision loop against a synthetic, degrading pod -- no Kubernetes cluster
 required (actions are faked so nothing is actually executed).
 

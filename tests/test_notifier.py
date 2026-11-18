@@ -398,7 +398,7 @@ class TestBuildAlertmanagerPayload:
     def test_alert_entry_fields(self):
         """Test each alert entry has labels, annotations, startsAt, endsAt."""
         payload = build_alertmanager_payload(
-            "remediation", "opendesk/pod-1", 92.0, action_taken="pod_restart"
+            "remediation", "openedusuite/pod-1", 92.0, action_taken="pod_restart"
         )
         alert = payload["alerts"][0]
         assert alert["status"] == "firing"
@@ -438,7 +438,7 @@ class TestBuildAlertmanagerPayload:
     def test_action_label_and_annotation(self):
         """Test the remediation action appears in labels and annotations."""
         payload = build_alertmanager_payload(
-            "remediation", "opendesk/pod-1", 90.0, action_taken="node_cordon"
+            "remediation", "openedusuite/pod-1", 90.0, action_taken="node_cordon"
         )
         alert = payload["alerts"][0]
         assert alert["labels"]["action"] == "node_cordon"
@@ -571,11 +571,11 @@ class TestNotificationManagerAlertmanager:
         """Test the alertmanager emission is recorded in history."""
         manager, email, webhook = self._make_manager()
         manager.notify_alertmanager(
-            "remediation", "opendesk/pod-1", 90.0, action_taken="node_cordon"
+            "remediation", "openedusuite/pod-1", 90.0, action_taken="node_cordon"
         )
         entry = manager.get_history()[-1]
         assert entry["format"] == "alertmanager"
-        assert entry["pod_name"] == "opendesk/pod-1"
+        assert entry["pod_name"] == "openedusuite/pod-1"
         assert entry["status"] == "firing"
         assert entry["webhook_sent"] is True
 

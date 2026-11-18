@@ -5,7 +5,7 @@ from predictive_agent.predictor import PredictionResult, Predictor
 def test_prediction_result_creation():
     """Test PredictionResult dataclass."""
     pr = PredictionResult(
-        pod_key="opendesk/openldap-0",
+        pod_key="openedusuite/openldap-0",
         risk_score=0.75,
         ttf_minutes=15,
         confidence=0.85,
@@ -15,7 +15,7 @@ def test_prediction_result_creation():
         memory_pct=85.0,
         cpu_pct=60.0,
     )
-    assert pr.pod_key == "opendesk/openldap-0"
+    assert pr.pod_key == "openedusuite/openldap-0"
     assert pr.risk_score == 0.75
     assert pr.ttf_minutes == 15
     assert pr.confidence == 0.85

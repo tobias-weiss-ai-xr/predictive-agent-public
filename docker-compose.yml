@@ -40,7 +40,7 @@ services:
       OPERATOR_HEALTH_PROBE_BIND_ADDRESS: 0.0.0.0:8081
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - predagent-state:/var/lib/opendesk
+      - predagent-state:/var/lib/predictive-agent
     ports:
       - "8080:8080"
       - "8081:8081"

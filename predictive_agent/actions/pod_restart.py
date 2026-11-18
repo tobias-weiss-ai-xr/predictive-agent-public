@@ -42,7 +42,7 @@ class PodRestartAction(RemediationAction):
             return False
 
         namespace = getattr(pod_state, "namespace", "")
-        if namespace in {"kube-system", "opendesk-predictive-agent"}:
+        if namespace in {"kube-system", "predictive-agent"}:
             return False
 
         phase = getattr(pod_state, "phase", "Running")

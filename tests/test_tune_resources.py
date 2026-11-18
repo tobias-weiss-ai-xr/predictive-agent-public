@@ -149,11 +149,11 @@ class TestTuneResourcesExecute:
     def test_execute_correct_namespace(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="patched", stderr="")
         action = ResourceTunerAction()
-        ctx = ActionContext(namespace="opendesk", dry_run=False)
+        ctx = ActionContext(namespace="openedusuite", dry_run=False)
         action.execute("app-deployment", ctx)
         cmd = mock_run.call_args[0][0]
         assert "-n" in cmd
-        assert "opendesk" in cmd
+        assert "openedusuite" in cmd
 
     @patch("predictive_agent.actions.tune_resources.subprocess.run")
     def test_execute_timeout_30s(self, mock_run):

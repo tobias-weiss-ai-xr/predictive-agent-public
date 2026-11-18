@@ -30,7 +30,7 @@ RISK_THRESHOLD = float(
 REMEDIATION_PROTECTED_NS = {
     ns.strip()
     for ns in os.environ.get(
-        "REMEDIATION_PROTECTED_NS", "kube-system,opendesk-predictive-agent"
+        "REMEDIATION_PROTECTED_NS", "kube-system,predictive-agent"
     ).split(",")
     if ns.strip()
 }

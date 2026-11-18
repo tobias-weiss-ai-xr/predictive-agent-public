@@ -33,7 +33,7 @@ def mock_kubectl_metrics():
     return {
         "default/test-pod-1": {"cpu_m": 100, "memory_mib": 256},
         "default/test-pod-2": {"cpu_m": 500, "memory_mib": 800},
-        "opendesk/openldap-0": {"cpu_m": 50, "memory_mib": 128},
+        "openedusuite/openldap-0": {"cpu_m": 50, "memory_mib": 128},
         "llm/ollama-0": {"cpu_m": 2000, "memory_mib": 4096},
     }
 
@@ -82,7 +82,7 @@ def mock_pod_json():
                 }
             },
             {
-                "metadata": {"namespace": "opendesk", "name": "openldap-0"},
+                "metadata": {"namespace": "openedusuite", "name": "openldap-0"},
                 "spec": {
                     "nodeName": "clrz14-07",
                     "containers": [{
@@ -305,8 +305,8 @@ class TestServerIntegration:
         import urllib.request
         with urllib.request.urlopen("http://localhost:18090/metrics") as resp:
             text = resp.read().decode()
-            assert "opendesk_predictive_agent_pods_tracked 2" in text
-            assert "opendesk_predictive_agent_predictions_count 2" in text
+            assert "predictive_agent_pods_tracked 2" in text
+            assert "predictive_agent_predictions_count 2" in text
 
     def test_cache_endpoint(self, server_with_state):
         """Cache endpoint should return the LLM analysis cache."""

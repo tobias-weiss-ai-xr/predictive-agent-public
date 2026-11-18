@@ -65,7 +65,7 @@ The operator persists the Markov transition matrix and prediction tracking to fi
 - **THEN** it reloads the persisted state model and predictions
 
 ### Requirement: Packaging and deployment
-The operator is built as a minimal nix image (Python 3 + kubectl + curl) and deployed either as a Docker Compose service (Zot registry `registry.example.org/predictive-agent:latest`) or as a Kubernetes Deployment with RBAC (ServiceAccount `opendesk-predictive-agent`).
+The operator is built as a minimal nix image (Python 3 + kubectl + curl) and deployed either as a Docker Compose service (Zot registry `registry.example.org/predictive-agent:latest`) or as a Kubernetes Deployment with RBAC (ServiceAccount `predictive-agent`).
 
 #### Scenario: Docker deployment
 - **WHEN** deployed via the `monitoring_agents` Ansible role
@@ -73,7 +73,7 @@ The operator is built as a minimal nix image (Python 3 + kubectl + curl) and dep
 
 #### Scenario: Kubernetes deployment
 - **WHEN** deployed via the k8s manifests
-- **THEN** it runs with the `opendesk-predictive-agent` ServiceAccount/ClusterRole and reads cluster metrics
+- **THEN** it runs with the `predictive-agent` ServiceAccount/ClusterRole and reads cluster metrics
 
 ### Requirement: Docker workload discovery
 The operator SHALL discover Docker containers to monitor without requiring Kubernetes namespaces. Discovery is driven by configurable selectors: a label key/value (`OPERATOR_WATCH_LABELS`), a compose project name (`OPERATOR_WATCH_COMPOSE_PROJECTS`), and/or explicit container-name patterns (`OPERATOR_WATCH_NAMES`). When no selector is configured in Docker mode it SHALL discover all running containers.

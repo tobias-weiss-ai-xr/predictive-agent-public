@@ -118,7 +118,7 @@ def test_render_prometheus_format():
     rem = _build_manager()
     rem.plan_and_execute("CRITICAL", "ns/pod", _Pod("CRITICAL"), _Pred(), 0.9, horizon=3)
     text = render_prometheus(collect_decision_metrics(rem))
-    assert "opendesk_predictive_agent_decision_layer_interventions_total" in text
+    assert "predictive_agent_decision_layer_interventions_total" in text
     assert "# TYPE" in text and "# HELP" in text
 
 
@@ -164,5 +164,5 @@ def test_metrics_endpoint_includes_decision_metrics():
         srv.server_close()
 
     assert status == 200
-    assert "opendesk_predictive_agent_decision_layer_interventions_total" in text
-    assert "opendesk_predictive_agent_decision_layer_learning_transitions_total" in text
+    assert "predictive_agent_decision_layer_interventions_total" in text
+    assert "predictive_agent_decision_layer_learning_transitions_total" in text

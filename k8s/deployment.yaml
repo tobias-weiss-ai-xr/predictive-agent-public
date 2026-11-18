@@ -7,9 +7,9 @@ metadata:
   labels:
     app.kubernetes.io/name: openedusuite-predictive-agent
     app.kubernetes.io/component: operator
-    app.kubernetes.io/part-of: opendesk
-    opendesk.org/component: predictive-monitor
-    opendesk.org/purpose: predictive-health
+    app.kubernetes.io/part-of: predictive-agent
+    predictive-agent.org/component: predictive-monitor
+    predictive-agent.org/purpose: predictive-health
 spec:
   replicas: 1
   selector:
@@ -23,8 +23,8 @@ spec:
       labels:
         app.kubernetes.io/name: openedusuite-predictive-agent
         app.kubernetes.io/component: operator
-        app.kubernetes.io/part-of: opendesk
-        opendesk.org/component: predictive-monitor
+        app.kubernetes.io/part-of: predictive-agent
+        predictive-agent.org/component: predictive-monitor
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8080"
@@ -81,11 +81,11 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
             - name: STATE_MODEL_FILE
-              value: "/var/lib/opendesk/state-model.json"
+              value: "/var/lib/predictive-agent/state-model.json"
             - name: PREDICTIONS_FILE
-              value: "/var/lib/opendesk/predictions.json"
+              value: "/var/lib/predictive-agent/predictions.json"
             - name: HISTORY_FILE
-              value: "/var/lib/opendesk/analysis-history.json"
+              value: "/var/lib/predictive-agent/analysis-history.json"
             - name: HISTORY_MAX
               value: "100"
             - name: OPERATOR_METRICS_BIND_ADDRESS
@@ -135,15 +135,15 @@ spec:
             - name: tmp
               mountPath: /tmp
             - name: var-log
-              mountPath: /var/log/opendesk
+              mountPath: /var/log/predictive-agent
             - name: var-lib
-              mountPath: /var/lib/opendesk
+              mountPath: /var/lib/predictive-agent
             - name: var-cache
-              mountPath: /var/cache/opendesk
+              mountPath: /var/cache/predictive-agent
             - name: run-dir
-              mountPath: /run/opendesk
+              mountPath: /run/predictive-agent
             - name: home
-              mountPath: /home/opendesk
+              mountPath: /home/predictive-agent
 
       volumes:
         - name: tmp
