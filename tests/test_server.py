@@ -2,7 +2,7 @@
 import json
 import urllib.error
 import urllib.request
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -48,6 +48,64 @@ def test_metrics(test_server):
     with urllib.request.urlopen("http://localhost:18080/metrics") as resp:
         text = resp.read().decode()
         assert "predictive_agent" in text
+
+
+def test_alerts_and_ceph_late_init(test_server):
+    """Server resolves the AlertFeed lazily from main._alert_feed.
+
+    The server starts before main() wires the feed; a late module-level
+    assignment must still light up /alerts and /ceph-health.
+    """
+    import predictive_agent.main as main
+    from predictive_agent.alerts_feed import AlertFeed
+
+    feed = AlertFeed(
+        alertmanager_url="http://am:9093",
+        prometheus_url="http://prom:9090",
+        boost=0.15,
+        ceph_watch=True,
+    )
+    feed._active_alerts = [
+        {"alertname": "CephHealthWarning", "namespace": "monitoring"}
+    ]
+    feed._active_namespaces = {"monitoring"}
+    feed._last_ceph_status = "OK"
+
+    old = main._alert_feed
+    main._alert_feed = feed
+    try:
+        with urllib.request.urlopen(
+            "http://localhost:18080/alerts"
+        ) as resp:
+            data = json.loads(resp.read().decode())
+            assert data["enabled"] is True
+            assert data["namespaces"] == ["monitoring"]
+            assert data["boost"] == 0.15
+
+        class _FakeResp:
+            status = 200
+
+            def read(self):
+                return (
+                    '{"data":{"result":[{"metric":{},"value":[1.0,"1"]}]}}'
+                ).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with patch("predictive_agent.alerts_feed.urlopen") as mock_u:
+            mock_u.return_value = _FakeResp()
+            with urllib.request.urlopen(
+                "http://localhost:18080/ceph-health"
+            ) as resp:
+                data = json.loads(resp.read().decode())
+                assert data["enabled"] is True
+                assert data["health"]["status"] == "OK"
+    finally:
+        main._alert_feed = old
 
 
 def test_status(test_server):

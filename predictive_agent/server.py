@@ -965,9 +965,24 @@ class RequestHandler(BaseHTTPRequestHandler):
             return {"status": "disabled", "message": "OPA integration not enabled"}
         return engine.get_stats()
 
+    def _current_feed(self):
+        """Resolve the AlertFeed, refreshing the context reference lazily.
+
+        The server is started before ``main()`` initialises ``_alert_feed``, so
+        the context snapshot at startup is None. Reading the module attribute
+        at request time keeps /alerts + /ceph-health correct regardless of
+        start ordering.
+        """
+        feed = _context.alert_feed
+        if feed is None:
+            feed = getattr(main, "_alert_feed", None)
+            if feed is not None:
+                _context.alert_feed = feed
+        return feed
+
     def _alerts_dict(self):
         # GET /alerts — AlertWatch active-alert correlation state
-        feed = _context.alert_feed
+        feed = self._current_feed()
         if feed is None:
             return {"enabled": False, "message": "AlertWatch not enabled (ALERT_FEED_ENABLED=0)"}
         return {
@@ -980,7 +995,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _ceph_health_dict(self):
         # GET /ceph-health — Ceph cluster health via Prometheus (ceph_health_status)
-        feed = _context.alert_feed
+        feed = self._current_feed()
         if feed is None:
             return {"enabled": False, "message": "AlertWatch not enabled (ALERT_FEED_ENABLED=0)"}
         if not feed.ceph_watch:
