@@ -152,12 +152,33 @@ action's `should_execute()` before anything runs on a real cluster.
 - Shadow mode and calibration guardrails are observe-only / fail-safe by default.
 - Nothing learned from `none` (do-nothing) outcomes — the baseline never
   "learns" to do nothing from itself.
+- The agent only ever touches workloads through operator-declared allowlists
+  (`FIX_IMAGE_TARGETS`, `REMEDIATION_PROTECTED_NS`, risk thresholds). It never
+  invents images: an allowlisted target image must already exist in the
+  registry or be produced by the internal build pipeline.
+
+### FixImage pipeline (v4.1.0, deployed 2026-11-18)
+
+`FixImageAction` fixes image/DB-migration drift by applying the allowlisted
+image with `mode=patch` (`kubectl set image`) — there are **no GitOps writes**
+(no commits/pushes to the HRZ GitLab; the `gitops-repo` initContainer and the
+`fiximage-git` Secret volume were removed from the deployment).
+
+Corrected/updated image artifacts are built by the internal CI on
+**vhrz2392** (`nix build`, same builder that builds the operator image) and
+relayed into the cluster registry `172.25.24.36:5001`. Keep the allowlisted
+tag in sync with what the pipeline has actually pushed; optionally a
+nix-builder Job inside the cluster can serve the same Artifact role later.
+
+Caveat: with `mode=patch`, an ArgoCD application whose policy reverts direct
+patches could undo the image change on the next selfHeal — re-drive the
+allowlisted mapping through the regular git/ArgoCD flow when a fix must stick.
 
 ## 7. Alert response (self-health + watchdog)
 
 The agent emails its own failure modes. Alerts arrive as mail to
-`ALERT_EMAIL_TO` via the configured `SMTP_HOST` relay (no auth; the From
-address must be a resolvable domain or the relay rejects with `550 5.1.8`).
+`ALERT_EMAIL_TO` (uni HRZ relay `smtp.uni-marburg.de:25`, no auth — From must
+be a resolvable uni domain or the relay rejects with `550 5.1.8`).
 
 | Mail / signal | Meaning | First response |
 |---|---|---|
