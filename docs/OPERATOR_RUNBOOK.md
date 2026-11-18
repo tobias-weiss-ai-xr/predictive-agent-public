@@ -164,11 +164,22 @@ image with `mode=patch` (`kubectl set image`) — there are **no GitOps writes**
 (no commits/pushes to the HRZ GitLab; the `gitops-repo` initContainer and the
 `fiximage-git` Secret volume were removed from the deployment).
 
-Corrected/updated image artifacts are built by the internal CI on
-**vhrz2392** (`nix build`, same builder that builds the operator image) and
-relayed into the cluster registry `172.25.24.36:5001`. Keep the allowlisted
-tag in sync with what the pipeline has actually pushed; optionally a
-nix-builder Job inside the cluster can serve the same Artifact role later.
+Corrected/updated image artifacts are produced by two equivalent image
+pipelines:
+
+1. **External CI (vhrz2392)** — `nix build .#predictive-agent` from the
+   private repo, relayed into the cluster registry `172.25.24.36:5001`.
+2. **In-cluster nix-builder** (`k8s/nix-builder/`, NS `nix-builder`, verified
+   2026-11-18) — `kubectl -n nix-builder exec deploy/nix-builder -- bash
+   /scripts/build-predictive-agent.sh <tag>` builds the public
+   `tobias-weiss-ai-xr/predictive-agent-public` repo and pushes it. Builds are
+   deterministic (pinned `flake.lock`; two runs produced the same manifest
+   digest).
+
+Both pipelines need the allowlisted target tag to already exist in the
+registry. The in-cluster builder uses the **public** repo, so its artifact may
+differ slightly from a private-repo build — tag accordingly and point
+`FIX_IMAGE_TARGETS` at the desired artifact.
 
 Caveat: with `mode=patch`, an ArgoCD application whose policy reverts direct
 patches could undo the image change on the next selfHeal — re-drive the
