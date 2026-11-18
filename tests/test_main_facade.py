@@ -159,3 +159,23 @@ def test_build_context_wires_alert_feed_from_config():
             assert main_mod._alert_feed is ctx.alert_feed
     finally:
         main_mod._alert_feed = old_feed
+
+
+def test_ensure_alert_feed_from_config():
+    """_ensure_alert_feed() wires the module-level feed when enabled."""
+    from predictive_agent import config
+    from predictive_agent.alerts_feed import AlertFeed
+
+    old_feed = main_mod._alert_feed
+    main_mod._alert_feed = None
+    try:
+        with patch.object(config, "ALERT_FEED_ENABLED", True):
+            feed = main_mod._ensure_alert_feed()
+            assert isinstance(feed, AlertFeed)
+            assert main_mod._alert_feed is feed
+        # disabled -> None without construction
+        with patch.object(config, "ALERT_FEED_ENABLED", False):
+            main_mod._alert_feed = None
+            assert main_mod._ensure_alert_feed() is None
+    finally:
+        main_mod._alert_feed = old_feed

@@ -111,29 +111,43 @@ _collect_docker_container_metrics = pod_collection.collect_docker_container_metr
 _get_container_memory_limit = pod_collection.get_container_memory_limit
 
 
+def _ensure_alert_feed():
+    """Return the module-level AlertWatch feed, constructing it from config
+    when missing. Single source of truth shared by the reconcile cycle and the
+    HTTP API (server._current_feed reads the same module attribute). Never
+    raises.
+    """
+    global _alert_feed
+    if _alert_feed is not None:
+        return _alert_feed
+    if not config.ALERT_FEED_ENABLED:
+        return None
+    try:
+        from predictive_agent.alerts_feed import AlertFeed
+
+        _alert_feed = AlertFeed(
+            alertmanager_url=config.ALERTMANAGER_URL,
+            prometheus_url=config.PROMETHEUS_URL,
+            prometheus_user=config.PROMETHEUS_BASIC_AUTH_USER,
+            prometheus_pass=config.PROMETHEUS_BASIC_AUTH_PASS,
+            timeout_s=config.ALERT_FEED_TIMEOUT_S,
+            boost=config.ALERT_FEED_RISK_BOOST,
+            ceph_watch=config.CEPH_WATCH_ENABLED,
+        )
+        logger.info(
+            "AlertWatch: feed constructed from config (ensure) mod=%s", __file__
+        )
+    except Exception as e:  # noqa: BLE001 - never break the loop on feed errors
+        logger.warning("AlertWatch init failed: %s", e)
+        _alert_feed = None
+    return _alert_feed
+
+
 def _build_context() -> "phases.ReconcileContext":
     """Bundle current globals into a phase context (late binding: the
     hooks are resolved from THIS module's namespace at call time, so
     patch("predictive_agent.main.<hook>") keeps intercepting)."""
-    global _alert_feed
-    # Deterministic AlertWatch wiring: if main() did not leave a module-level
-    # feed (start ordering), construct one from config here so every cycle
-    # refreshes cluster alerts and Ceph health. Mirrors the server fallback in
-    # server._current_feed.
-    if _alert_feed is None and config.ALERT_FEED_ENABLED:
-        try:
-            from predictive_agent.alerts_feed import AlertFeed
-            _alert_feed = AlertFeed(
-                alertmanager_url=config.ALERTMANAGER_URL,
-                prometheus_url=config.PROMETHEUS_URL,
-                prometheus_user=config.PROMETHEUS_BASIC_AUTH_USER,
-                prometheus_pass=config.PROMETHEUS_BASIC_AUTH_PASS,
-                timeout_s=config.ALERT_FEED_TIMEOUT_S,
-                boost=config.ALERT_FEED_RISK_BOOST,
-                ceph_watch=config.CEPH_WATCH_ENABLED,
-            )
-        except Exception:  # noqa: BLE001 - never break the loop on feed errors
-            _alert_feed = None
+    _ensure_alert_feed()
     return phases.ReconcileContext(
         state_model=_state_model,
         predictor=_predictor,
@@ -208,8 +222,11 @@ def reconcile() -> Dict[str, Any]:
 
     # AlertWatch: refresh cluster alerts once per cycle and drain Ceph health
     # transitions to the notifier (opt-in; feed never raises).
-    alert_feed = getattr(ctx, "alert_feed", None)
+    alert_feed = _ensure_alert_feed()
     if alert_feed is not None:
+        logger.info(
+            "AlertWatch cycle refresh: feed=%s mod=%s", id(alert_feed), __file__
+        )
         try:
             alert_feed.refresh()
             ceph_evt = alert_feed.ceph_transition_event()

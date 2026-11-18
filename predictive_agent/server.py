@@ -992,7 +992,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 boost=config.ALERT_FEED_RISK_BOOST,
                 ceph_watch=config.CEPH_WATCH_ENABLED,
             )
-            logger.info("AlertWatch: lazily created feed from config")
+            logger.info(
+                "AlertWatch: lazily created feed from config (server mod=%s)",
+                getattr(main, "__file__", "?"),
+            )
             main._alert_feed = feed
             _context.alert_feed = feed
         elif feed is not None and feed is not _context.alert_feed:
