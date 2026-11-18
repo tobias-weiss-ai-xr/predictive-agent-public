@@ -65,13 +65,15 @@ let
 in
 pkgs.dockerTools.buildLayeredImage {
   name = "predictive-agent";
-  tag = "v4.0.8.1-nix";
+  tag = "v4.1.0-nix";
 
   contents = with pkgs; [
-    python3
+    (python3.withPackages (ps: [ ps.requests ]))  # AlertWatch fetch layer
     curl
     bash
     kubectl
+    git            # FixImage gitops mode (manifest commit + push)
+    openssh        # git+ssh push transport for FixImage
     docker-client   # needed for Docker-native discovery (docker ps / docker inspect)
     coreutils
     gnugrep
@@ -111,8 +113,8 @@ pkgs.dockerTools.buildLayeredImage {
       "REMEDIATION_COOLDOWN_S=300"
       "REMEDIATION_RISK_THRESHOLD=0.7"
       "REMEDIATION_PROTECTED_NS=kube-system,predictive-agent"
-      "ALERT_EMAIL_TO=alerts@example.com"
-      "SMTP_HOST=smtp.example.com"
+      "ALERT_EMAIL_TO=tobias.weiss@uni-marburg.de"
+      "SMTP_HOST=smtp.uni-marburg.de"
       "SMTP_PORT=587"
       "SMTP_USE_TLS=true"
       "WEBHOOK_URL="
