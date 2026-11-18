@@ -68,7 +68,7 @@ pkgs.dockerTools.buildLayeredImage {
   tag = "v4.1.0-nix";
 
   contents = with pkgs; [
-    (python3.withPackages (ps: [ ps.requests ]))  # AlertWatch fetch layer
+    python3  # AlertWatch uses stdlib urllib only (no requests in the image)
     curl
     bash
     kubectl

@@ -19,10 +19,12 @@ by a dead Alertmanager/Prometheus.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-
-import requests
+from base64 import b64encode
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from predictive_agent import config
 
@@ -106,14 +108,20 @@ class AlertFeed:
         return bool(self.alertmanager_url)
 
     def _get_json(self, url: str, params=None, auth=None):
+        """GET + JSON parse using stdlib only (no requests in the nix image)."""
+        if params:
+            sep = "&" if "?" in url else "?"
+            url = url + sep + urlencode(params)
+        request = Request(url)
+        if auth and auth[0]:
+            token = b64encode(f"{auth[0]}:{auth[1] or ''}".encode("utf-8")).decode("ascii")
+            request.add_header("Authorization", f"Basic {token}")
         try:
-            resp = requests.get(
-                url, params=params, auth=auth, timeout=self.timeout_s
-            )
-            if resp.status_code != 200:
-                logger.warning("AlertWatch: %s -> HTTP %s", url, resp.status_code)
-                return None
-            return resp.json()
+            with urlopen(request, timeout=self.timeout_s) as resp:
+                if getattr(resp, "status", 200) != 200:
+                    logger.warning("AlertWatch: %s -> HTTP %s", url, resp.status)
+                    return None
+                return json.loads(resp.read().decode("utf-8"))
         except Exception as e:  # noqa: BLE001
             logger.debug("AlertWatch: %s fetch failed: %s", url, e)
             return None
