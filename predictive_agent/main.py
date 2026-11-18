@@ -226,7 +226,10 @@ def reconcile() -> Dict[str, Any]:
     alert_feed = _ensure_alert_feed()
     if alert_feed is not None:
         logger.info(
-                "AlertWatch cycle refresh: feed=%s mod=%s mid=%s",
+            "AlertWatch cycle refresh: feed=%s mod=%s mid=%s",
+            id(alert_feed),
+            __file__,
+            id(sys.modules[__name__]),
         )
         try:
             alert_feed.refresh()

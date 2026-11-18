@@ -1004,6 +1004,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             _context.alert_feed = feed
         elif feed is not None and feed is not _context.alert_feed:
             _context.alert_feed = feed  # keep the context snapshot in sync
+        # Freshness guard: the API must never serve a stale (or never-wired)
+        # feed. Refresh on demand when the last fetch is older than ~75s or
+        # happened at all. Bounded: never raises, reflects Alertmanager state.
+        if feed is not None and (
+            time.time() - float(getattr(feed, "last_alert_fetch", 0.0)) > 75
+        ):
+            try:
+                feed.refresh()
+            except Exception:  # noqa: BLE001 - API must stay responsive
+                pass
         return feed
 
     def _alerts_dict(self):

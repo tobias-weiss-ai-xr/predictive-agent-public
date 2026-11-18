@@ -1,5 +1,6 @@
 """Test HTTP server endpoints with real data integration."""
 import json
+import time
 import urllib.error
 import urllib.request
 from unittest.mock import MagicMock, patch
@@ -98,6 +99,7 @@ def test_alerts_and_ceph_late_init(test_server):
     ]
     feed._active_namespaces = {"monitoring"}
     feed._last_ceph_status = "OK"
+    feed.last_alert_fetch = time.time()  # suppress the on-demand refresh guard
 
     old = main._alert_feed
     main._alert_feed = feed
@@ -315,3 +317,50 @@ def test_remediation_log_disabled(test_server):
             assert data["total"] == 0
     finally:
         server._context.remediation_manager = old_manager
+
+
+def test_alerts_refresh_on_demand(test_server):
+    """/alerts refreshes the feed when last fetch is stale (0 = never)."""
+    import predictive_agent.main as main
+    from predictive_agent.alerts_feed import AlertFeed
+
+    old_feed = main._alert_feed
+    feed = AlertFeed(
+        alertmanager_url="http://am:9093",
+        prometheus_url="http://prom:9090",
+        boost=0.15,
+        ceph_watch=False,
+    )
+    feed.last_alert_fetch = 0.0  # brand-new, must trigger refresh
+    main._alert_feed = feed
+    try:
+        with patch("predictive_agent.alerts_feed.urlopen") as mock_u:
+            mock_u.return_value = _Resp(
+                [{"status": "firing", "labels": {"alertname": "B", "namespace": "llm"}}]
+            )
+            with urllib.request.urlopen(
+                "http://localhost:18080/alerts"
+            ) as resp:
+                data = json.loads(resp.read().decode())
+                assert data["enabled"] is True
+                assert data["namespaces"] == ["llm"]
+                assert data["last_fetch"] > 0
+    finally:
+        main._alert_feed = old_feed
+
+
+class _Resp:
+    status = 200
+
+    def __init__(self, payload):
+        import json as _j
+        self._data = _j.dumps(payload).encode()
+
+    def read(self):
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
