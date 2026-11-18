@@ -137,3 +137,25 @@ def test_reconcile_counter_advances():
     finally:
         for p in patches:
             p.stop()
+
+
+def test_build_context_wires_alert_feed_from_config():
+    """_build_context() must deterministically wire the AlertFeed.
+
+    Guards the AlertWatch refresh path: when main() never left a module-level
+    feed but ALERT_FEED_ENABLED is on, every reconcile cycle must still get a
+    feed so cluster-alert refresh + Ceph transition events run.
+    """
+    from predictive_agent import config
+    from predictive_agent.alerts_feed import AlertFeed
+
+    old_feed = main_mod._alert_feed
+    main_mod._alert_feed = None
+    try:
+        with patch.object(config, "ALERT_FEED_ENABLED", True):
+            ctx = main_mod._build_context()
+            assert ctx.alert_feed is not None
+            assert isinstance(ctx.alert_feed, AlertFeed)
+            assert main_mod._alert_feed is ctx.alert_feed
+    finally:
+        main_mod._alert_feed = old_feed
