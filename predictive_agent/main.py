@@ -17,6 +17,7 @@ endpoints.
 """
 
 import logging
+import sys
 import signal
 import threading
 import time
@@ -225,7 +226,7 @@ def reconcile() -> Dict[str, Any]:
     alert_feed = _ensure_alert_feed()
     if alert_feed is not None:
         logger.info(
-            "AlertWatch cycle refresh: feed=%s mod=%s", id(alert_feed), __file__
+                "AlertWatch cycle refresh: feed=%s mod=%s mid=%s",
         )
         try:
             alert_feed.refresh()

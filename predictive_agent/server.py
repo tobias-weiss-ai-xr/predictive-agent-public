@@ -9,6 +9,7 @@ empty defaults so the server always responds correctly.
 """
 
 import json
+import sys
 import logging
 import socketserver
 import threading
@@ -993,8 +994,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 ceph_watch=config.CEPH_WATCH_ENABLED,
             )
             logger.info(
-                "AlertWatch: lazily created feed from config (server mod=%s)",
+                "AlertWatch: lazily created feed from config (server mod=%s "
+                "modid=%s sysid=%s)",
                 getattr(main, "__file__", "?"),
+                id(main),
+                id(sys.modules.get("predictive_agent.main")),
             )
             main._alert_feed = feed
             _context.alert_feed = feed
