@@ -176,6 +176,12 @@ pipelines:
    deterministic (pinned `flake.lock`; two runs produced the same manifest
    digest).
 
+As of 2026-11-18 the live `FIX_IMAGE_TARGETS` entry (`open-webui`) points **by
+sha256 digest** at the artifact produced by the in-cluster nix-builder
+(`build-open-webui.sh`, digest `sha256:4aa9306b…`, verified byte-identical to
+the running Deployment image) — so FixImage now corrects image drift to the
+deterministic in-cluster artifact instead of an upstream re-tag.
+
 Both pipelines need the allowlisted target tag to already exist in the
 registry. The in-cluster builder uses the **public** repo, so its artifact may
 differ slightly from a private-repo build — tag accordingly and point
