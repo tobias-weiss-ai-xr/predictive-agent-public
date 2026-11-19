@@ -747,6 +747,69 @@ def test_is_pod_ghost_detects_terminating_and_dead_rs_owners():
     assert is_pod_ghost(ds_owned, rs_json=rs_json) is False
 
 
+def test_is_pod_ghost_stale_failed_replica_of_healthy_rs():
+    """The dominant 2026-11-19 flood driver: pod is Failed but its RS is fully
+    ready (replacement already up) — a lingering evicted replica that K8s won't
+    clean. Must be treated as ghost (not actionable, not escalated)."""
+    from predictive_agent.pod_collection import is_pod_ghost
+
+    rs_json = {"items": [{"metadata": {"name": "app-rs"},
+                           "spec": {"replicas": 1},
+                           "status": {"readyReplicas": 1}}]}
+    failed_live_rs = {"metadata": {"name": "app-old", "namespace": "app",
+                                    "ownerReferences": [{"kind": "ReplicaSet",
+                                                          "name": "app-rs"}]},
+                       "status": {"phase": "Failed"}, "spec": {}}
+    assert is_pod_ghost(failed_live_rs, rs_json=rs_json) is True
+
+    # Same pod but RS not fully ready -> NOT a leftover -> keep it actionable
+    rs_json_degraded = {"items": [{"metadata": {"name": "app-rs"},
+                                    "spec": {"replicas": 1},
+                                    "status": {"readyReplicas": 0}}]}
+    assert is_pod_ghost(failed_live_rs, rs_json=rs_json_degraded) is False
+
+    # Running pod (even with a healthy RS) is never stale-failed
+    running = {"metadata": {"name": "app-cur", "namespace": "app",
+                              "ownerReferences": [{"kind": "ReplicaSet",
+                                                    "name": "app-rs"}]},
+                "status": {"phase": "Running"}, "spec": {}}
+    assert is_pod_ghost(running, rs_json=rs_json) is False
+
+
+def test_collect_metrics_skips_stale_failed_replicas_k8s():
+    """Failed pods whose ReplicaSet is fully healthy are excluded at collect
+    time — they are leftovers from the eviction wave, not actionable failures."""
+    pods = [
+        {"metadata": {"name": "ok", "namespace": "default"},
+         "status": {"phase": "Running"}, "spec": {}},
+        {"metadata": {"name": "stale", "namespace": "default",
+                      "ownerReferences": [{"kind": "ReplicaSet",
+                                            "name": "cur-rs"}]},
+         "status": {"phase": "Failed"}, "spec": {}},
+        {"metadata": {"name": "genuine-crash", "namespace": "default",
+                      "ownerReferences": [{"kind": "ReplicaSet",
+                                            "name": "crash-rs"}]},
+         "status": {"phase": "Failed"}, "spec": {}},
+    ]
+    ctx = _build_ctx(
+        state_model=StateModel(),
+        get_pods_json=lambda: {"items": pods},
+        get_rs_json=lambda: {"items": [
+            {"metadata": {"name": "cur-rs"},
+             "spec": {"replicas": 1}, "status": {"readyReplicas": 1}},
+            {"metadata": {"name": "crash-rs"},
+             "spec": {"replicas": 1}, "status": {"readyReplicas": 0}},
+        ]},
+        is_pod_ghost=pod_collection.is_pod_ghost,
+    )
+    res = phases.collect_metrics(ctx, 1)
+    # stale Failed + RS ready is skipped; genuine crash (RS not ready) kept
+    assert res.current_keys == {"default/ok", "default/genuine-crash"}
+    keys = {(p.get("metadata", {}).get("namespace"), p.get("metadata", {}).get("name"))
+            for p in res.pod_items}
+    assert keys == {("default", "ok"), ("default", "genuine-crash")}
+
+
 def test_get_ghost_replicasets_builds_dead_rs_set():
     from predictive_agent.pod_collection import get_ghost_replicasets
     rs_items = [

@@ -275,10 +275,43 @@ def is_pod_ghost(pod: dict, rs_json: Optional[dict] = None) -> bool:
         return False
     owner_refs = meta.get("ownerReferences", []) or []
     rss = get_ghost_replicasets(rs_json)
-    return any(
-        ref.get("kind") == "ReplicaSet" and ref.get("name") in rss
-        for ref in owner_refs
-    )
+    if any(ref.get("kind") == "ReplicaSet" and ref.get("name") in rss
+           for ref in owner_refs):
+        return True
+    return is_stale_failed_replica(pod, rs_json)
+
+
+def is_stale_failed_replica(pod: dict, rs_json: Optional[dict] = None) -> bool:
+    """True when a pod is a stale ``Failed`` replica of an otherwise healthy RS.
+
+    After a node-eviction / OOM wave the replacement pod is up and the RS is
+    fully ready (``status.readyReplicas >= spec.replicas``), but the old
+    evicted pod can linger in ``Failed`` phase for days. K8s will not clean it
+    up, yet it has zero operational value (no container, no scheduler claim).
+    Scoring it at 0.99 (``pod_phase Failed -> LR 20``) permanently inflates the
+    at-risk fleet and re-triggers escalations. The RS being fully healthy is
+    what proves the pod is a leftover, not an actionable failure."""
+    if pod.get("status", {}).get("phase") != "Failed":
+        return False
+    if not rs_json:
+        return False
+    owner_refs = pod.get("metadata", {}).get("ownerReferences", []) or []
+    rs_by_name = {}
+    for rs in rs_json.get("items", []) or []:
+        m = rs.get("metadata", {}) or {}
+        if m.get("name"):
+            rs_by_name[m["name"]] = rs
+    for ref in owner_refs:
+        if ref.get("kind") != "ReplicaSet":
+            continue
+        rs = rs_by_name.get(ref.get("name", ""))
+        if not rs:
+            continue
+        spec_r = rs.get("spec", {}).get("replicas", 0)
+        ready_r = (rs.get("status", {}) or {}).get("readyReplicas", 0)
+        if spec_r > 0 and ready_r >= spec_r:
+            return True
+    return False
 
 
 def get_node_pressure(node_conditions: dict, node_name: str) -> Tuple[bool, bool]:
