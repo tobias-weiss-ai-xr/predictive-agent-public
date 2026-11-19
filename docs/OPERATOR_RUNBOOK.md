@@ -191,6 +191,11 @@ Caveat: with `mode=patch`, an ArgoCD application whose policy reverts direct
 patches could undo the image change on the next selfHeal — re-drive the
 allowlisted mapping through the regular git/ArgoCD flow when a fix must stick.
 
+Revert (failed verification): `fix_image` restores the previous image of the
+*target* container (the `prev_image` snapshot is captured per-container) and
+re-resolves the owning Deployment from the pod name — safe on multi-container
+workloads.
+
 ## 7. Alert response (self-health + watchdog)
 
 The agent emails its own failure modes. Alerts arrive as mail to
