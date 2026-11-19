@@ -11,7 +11,7 @@ import fnmatch
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Optional, Set, Tuple
 
 from predictive_agent import config
 from predictive_agent.collector import parse_memory
@@ -217,6 +217,68 @@ def is_pod_excluded(pod: dict) -> bool:
         if key in annotations and (value is None or annotations[key] == value):
             return True
     return False
+
+
+def get_rs_json() -> dict:
+    """Fetch ReplicaSet list across the cluster as JSON (for ghost-pod
+    detection — which RS are scaled to 0). Never raises: on any failure the
+    caller falls back to "no ghosts detected by owner"."""
+    from predictive_agent import main  # deferred: late-bound patch target
+
+    try:
+        if kubectl_binary_missing():
+            return {"items": []}
+        rc, stdout, _ = main.run_cmd(
+            ["kubectl", "get", "replicasets", "-A", "-o", "json"], timeout=10
+        )
+        if rc != 0 or not stdout:
+            return {"items": []}
+        parsed = json.loads(stdout)
+        return parsed if isinstance(parsed, dict) else {"items": []}
+    except Exception:  # noqa: BLE001 - ghost detection must degrade, not crash
+        return {"items": []}
+
+
+def get_ghost_replicasets(rs_json: dict) -> Set[str]:
+    """Names of ReplicaSets currently scaled to zero replicas (``spec.replicas
+    == 0``). Pods owned by these are leftovers from old Deployments revisions —
+    K8s is done with them (desired=0) but their Error pods can linger in the
+    cluster and, if the operator keeps scoring them, they permanently inflate
+    the at-risk fleet and re-trigger escalations."""
+    dead: Set[str] = set()
+    for rs in rs_json.get("items", []) or []:
+        if rs.get("spec", {}).get("replicas", 1) == 0:
+            dead.add(rs.get("metadata", {}).get("name", ""))
+    return {name for name in dead if name}
+
+
+def is_pod_ghost(pod: dict, rs_json: Optional[dict] = None) -> bool:
+    """True when a pod is a ghost (not actionable, must not be scored/escalated).
+
+    Two ghost classes:
+    - **Terminating**: ``metadata.deletionTimestamp`` is set — K8s already
+      decided to delete this pod (stuck deletion happens when the owning
+      node is unreachable or a finalizer blocks); there is nothing to remediate.
+    - **Dead-RS replica**: the pod is owned by a ReplicaSet whose
+      ``spec.replicas`` is 0 (old Deployment revision). Its Error/Failed state
+      is expected — it was scaled away, not crashing. Detection needs the RS
+      list (``rs_json``) because the pod object alone cannot see target size.
+
+    Non-ReplicaSet owners (DaemonSet, StatefulSet, Job) are never classified
+    as ghosts by the second rule: DaemonSets/StatefulSets own running pods
+    directly and Job pods are already filtered upstream.
+    """
+    meta = pod.get("metadata", {}) or {}
+    if meta.get("deletionTimestamp"):
+        return True
+    if not rs_json:
+        return False
+    owner_refs = meta.get("ownerReferences", []) or []
+    rss = get_ghost_replicasets(rs_json)
+    return any(
+        ref.get("kind") == "ReplicaSet" and ref.get("name") in rss
+        for ref in owner_refs
+    )
 
 
 def get_node_pressure(node_conditions: dict, node_name: str) -> Tuple[bool, bool]:

@@ -50,6 +50,7 @@ _DEFAULT_HOOKS = dict(
     collect_top_metrics=lambda out: {},
     collect_top_nodes=lambda out: None,
     get_pods_json=lambda: {"items": []},
+    get_rs_json=lambda: {"items": []},
     get_node_conditions=lambda d: {},
     get_pod_namespace=lambda p: p.get("metadata", {}).get("namespace", "default"),
     get_pod_name=lambda p: p.get("metadata", {}).get("name", "x"),
@@ -57,6 +58,7 @@ _DEFAULT_HOOKS = dict(
     get_pod_restart_count=lambda p: 0,
     should_skip_namespace=lambda ns: False,
     is_pod_excluded=lambda p: False,
+    is_pod_ghost=lambda p, rs=None: False,
     get_node_pressure=lambda conds, node: (False, False),
     matches_docker_selectors=lambda info, sel: True,
     get_container_memory_limit=lambda info: 0,
@@ -177,6 +179,56 @@ def test_collect_metrics_skips_succeeded_and_job_pods_k8s():
                      get_pods_json=lambda: {"items": pods})
     res = phases.collect_metrics(ctx, 1)
     assert res.current_keys == {"default/ok"}
+
+
+def test_collect_metrics_skips_ghost_pods_k8s():
+    """Ghost pods must be excluded from collection entirely: not tracked, not
+    scored, not escalated (old RS replicas / Terminating leftovers otherwise
+    inflate the at-risk fleet and re-trigger escalations after every restart)."""
+    pods = [
+        {"metadata": {"name": "ok", "namespace": "default"},
+         "status": {"phase": "Running"}, "spec": {}},
+        {"metadata": {"name": "ghost-term", "namespace": "default",
+                      "deletionTimestamp": "2026-11-19T15:00:00Z"},
+         "status": {"phase": "Running"}, "spec": {}},
+        {"metadata": {"name": "ghost-oldrs", "namespace": "default",
+                      "ownerReferences": [{"kind": "ReplicaSet", "name": "app-old-rs"}]},
+         "status": {"phase": "Failed"}, "spec": {}},
+        {"metadata": {"name": "active-fail", "namespace": "default",
+                      "ownerReferences": [{"kind": "ReplicaSet", "name": "app-cur-rs"}]},
+         "status": {"phase": "Failed"}, "spec": {}},
+    ]
+    ctx = _build_ctx(
+        state_model=StateModel(),
+        get_pods_json=lambda: {"items": pods},
+        get_rs_json=lambda: {"items": [
+            {"metadata": {"name": "app-old-rs"}, "spec": {"replicas": 0}},
+            {"metadata": {"name": "app-cur-rs"}, "spec": {"replicas": 2}},
+        ]},
+        is_pod_ghost=pod_collection.is_pod_ghost,
+    )
+    res = phases.collect_metrics(ctx, 1)
+    # only ok + active-fail survive; both ghosts excluded from pod_items too
+    assert res.current_keys == {"default/ok", "default/active-fail"}
+    keys = {(p.get("metadata", {}).get("namespace"), p.get("metadata", {}).get("name"))
+            for p in res.pod_items}
+    assert keys == {("default", "ok"), ("default", "active-fail")}
+
+
+def test_collect_metrics_default_ghost_hook_keeps_all():
+    """Without a configured ghost hook (default), collection is unchanged —
+    existing deployments/tests that don't supply rs_json keep all pods."""
+    pods = [
+        {"metadata": {"name": "ok", "namespace": "default"},
+         "status": {"phase": "Running"}, "spec": {}},
+        {"metadata": {"name": "ghost-term", "namespace": "default",
+                      "deletionTimestamp": "2026-11-19T15:00:00Z"},
+         "status": {"phase": "Running"}, "spec": {}},
+    ]
+    ctx = _build_ctx(state_model=StateModel(),
+                     get_pods_json=lambda: {"items": pods})
+    res = phases.collect_metrics(ctx, 1)
+    assert res.current_keys == {"default/ok", "default/ghost-term"}
 
 
 def test_collect_metrics_excludes_virt_launcher_pods_k8s():
@@ -648,7 +700,99 @@ def test_pod_collection_helpers():
     assert mem is True and disk is False
 
 
+def test_is_pod_ghost_detects_terminating_and_dead_rs_owners():
+    """Ghost pods (Terminating, or owned by a ReplicaSet scaled to 0) must be
+    detectable so the operator stops scoring/escalating leftovers from old
+    revisions. Regression: 2026-11-19 fleet-wide 0.99 at-risk inflation was
+    driven by ~15+ ghost replicas whose RS had desired=0 but whose Error pods
+    never got cleaned up — each drove a fresh remediation_exhausted escalation."""
+    from predictive_agent.pod_collection import is_pod_ghost
+
+    # Healthy active pod -> not a ghost
+    live = {"metadata": {"name": "web-1", "namespace": "app"},
+            "status": {"phase": "Running"}, "spec": {}}
+    assert is_pod_ghost(live) is False
+    assert is_pod_ghost(live, rs_json={"items": [{"metadata": {"name": "web-rs"},
+                                                   "spec": {"replicas": 2}}]}) is False
+
+    # Terminating pod -> ghost regardless of owner
+    terminating = {"metadata": {"name": "web-0", "namespace": "app",
+                                  "deletionTimestamp": "2026-11-19T15:00:00Z"},
+                    "status": {"phase": "Running"}, "spec": {}}
+    assert is_pod_ghost(terminating) is True
+
+    # Owned by a ReplicaSet scaled to 0 -> ghost
+    dead_owned = {"metadata": {"name": "web-9x1", "namespace": "app",
+                                 "ownerReferences": [{"kind": "ReplicaSet",
+                                                       "name": "web-old-rs"}]},
+                   "status": {"phase": "Failed"}, "spec": {}}
+    rs_json = {"items": [
+        {"metadata": {"name": "web-old-rs"}, "spec": {"replicas": 0}},
+        {"metadata": {"name": "web-rs"}, "spec": {"replicas": 2}},
+    ]}
+    assert is_pod_ghost(dead_owned, rs_json=rs_json) is True
+
+    # Owned by a ReplicaSet still scaled -> not a ghost
+    active_owned = {"metadata": {"name": "web-2", "namespace": "app",
+                                   "ownerReferences": [{"kind": "ReplicaSet",
+                                                         "name": "web-rs"}]},
+                     "status": {"phase": "Failed"}, "spec": {}}
+    assert is_pod_ghost(active_owned, rs_json=rs_json) is False
+
+    # Non-ReplicaSet owner (DaemonSet, StatefulSet) -> not classified as ghost
+    ds_owned = {"metadata": {"name": "ds-x", "namespace": "app",
+                               "ownerReferences": [{"kind": "DaemonSet",
+                                                     "name": "ds"}]},
+                 "status": {"phase": "Running"}, "spec": {}}
+    assert is_pod_ghost(ds_owned, rs_json=rs_json) is False
+
+
+def test_get_ghost_replicasets_builds_dead_rs_set():
+    from predictive_agent.pod_collection import get_ghost_replicasets
+    rs_items = [
+        {"metadata": {"name": "web-old"}, "spec": {"replicas": 0}},
+        {"metadata": {"name": "web-cur"}, "spec": {"replicas": 3}},
+        {"metadata": {"name": "web-old2"}, "spec": {"replicas": 0}},
+    ]
+    assert get_ghost_replicasets({"items": rs_items}) == {"web-old", "web-old2"}
+    assert get_ghost_replicasets({}) == set()
+
+
 # ── Additional phase branches (coverage expansion) ─────────────────────────
+
+
+def test_evaluate_pods_skips_ghost_pods():
+    """Defense-in-depth: even if a ghost pod reaches the evaluate loop it must
+    not be scored/remediated/escalated — it is a leftover replica or a
+    Terminating pod, not an actionable failure."""
+    notifier = MagicMock()
+
+    ghost = {"metadata": {"name": "ghost", "namespace": "default",
+                          "deletionTimestamp": "2026-11-19T15:00:00Z"},
+             "status": {"phase": "Running"}, "spec": {}, "_ghost": True}
+    ctx = _build_ctx(
+        state_model=StateModel(), predictor=Predictor(risk_threshold=0.0),
+        notifier=notifier, remediation_manager=FakeRemediationManager(),
+        policy_engine=MockPolicy(),
+        get_rs_json=lambda: {"items": []},
+        is_pod_ghost=lambda pod, rs=None: True,  # every pod flagged as ghost
+    )
+    phases.evaluate_pods(ctx, 1, "kubernetes", [ghost], {}, {}, set())
+    assert notifier.notify.call_count == 0
+    ctx.remediation_manager.plan_and_execute.assert_not_called()
+    assert "default/ghost" not in ctx.state_model.pods
+
+    # Non-ghost pod still goes through the normal loop
+    live = _healthy_pod()
+    ctx2 = _build_ctx(
+        state_model=StateModel(), predictor=Predictor(risk_threshold=0.0),
+        notifier=MagicMock(), remediation_manager=FakeRemediationManager(),
+        policy_engine=MockPolicy(),
+        get_rs_json=lambda: {"items": []},
+        is_pod_ghost=lambda pod, rs=None: False,
+    )
+    phases.evaluate_pods(ctx2, 1, "kubernetes", [live], {}, {}, set())
+    assert ctx2.state_model.pods
 
 
 def test_evaluate_pods_escalates_when_remediation_exhausted():

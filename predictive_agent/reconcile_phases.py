@@ -18,7 +18,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from predictive_agent import config
 from predictive_agent.collector import docker_status_signals
@@ -94,6 +94,7 @@ class ReconcileContext:
     collect_top_metrics: Callable[[str], dict]
     collect_top_nodes: Callable[[str], None]
     get_pods_json: Callable[[], dict]
+    get_rs_json: Callable[[], dict]
     get_node_conditions: Callable[[dict], dict]
     get_pod_namespace: Callable[[dict], str]
     get_pod_name: Callable[[dict], str]
@@ -101,6 +102,7 @@ class ReconcileContext:
     get_pod_restart_count: Callable[[dict], int]
     should_skip_namespace: Callable[[str], bool]
     is_pod_excluded: Callable[[dict], bool]
+    is_pod_ghost: Callable[[dict, Optional[dict]], bool]
     get_node_pressure: Callable[[dict, str], Tuple[bool, bool]]
     matches_docker_selectors: Callable[[dict, dict], bool]
     get_container_memory_limit: Callable[[dict], int]
@@ -239,6 +241,22 @@ def collect_metrics(ctx: ReconcileContext, cycle: int) -> CollectResult:
                     pass
 
             pod_items = pods_json.get("items", [])
+
+            # Ghost pods (Terminating / dead-RS leftovers) are removed from the
+            # raw items BEFORE evaluation so they are never scored, remediated
+            # or escalated. Detection uses the RS list (one kubectl call per
+            # cycle); a failure to fetch RS degrades to "no ghosts" (safe: the
+            # stuck-terminating signal still works without RS data).
+            try:
+                rs_json = ctx.get_rs_json()
+            except Exception:  # noqa: BLE001 - ghost detection must not fail collect
+                rs_json = {"items": []}
+            if not isinstance(rs_json, dict):
+                rs_json = {"items": []}
+            pod_items = [
+                pod for pod in pod_items
+                if not ctx.is_pod_ghost(pod, rs_json)
+            ]
 
             # An empty pod list is a valid collection result (no pods match
             # the selectors), not a failure. Real failures (kubectl unreachable)
@@ -384,6 +402,12 @@ def evaluate_pods(
     escalated_this_cycle: list = []
 
     for pod in pod_items:
+        # Ghost pods (Terminating / dead-RS leftovers) are excluded from the
+        # evaluate loop entirely — defense-in-depth after collect filtering
+        # (see collect_metrics). They are not actionable; scoring/escalating
+        # them re-triggers escalations for leftovers from old revisions.
+        if ctx.is_pod_ghost(pod, ctx.get_rs_json()):
+            continue
         # Handle degraded mode pods (use existing tracker data)
         if pod.get("_degraded_mode"):
             ns = pod.get("metadata", {}).get("namespace", "default")
