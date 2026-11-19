@@ -45,6 +45,14 @@ action's `should_execute()` before anything runs on a real cluster.
 - `CRASHLOOP_ESCALATE_AFTER` (`3`) — consecutive at-risk cycles with only `none`
   decided before escalation.
 
+> **Flood control (2026-11-19):** escalations are aggregated — every pod that
+> escalates in one reconcile cycle is collected and emitted as **one**
+> `remediation_exhausted` summary webhook (throttled 600 s per cycle), not one
+> webhook per pod. This matters because the futile counters are in-memory: an
+> operator restart resets them, so a whole at-risk fleet re-escalates at once.
+> Without aggregation that is N webhooks -> the alert channel floods (observed:
+> 85+ messages in minutes). Consumers still receive the full pod list.
+
 ### Safety & trust
 - `MIN_ACTION_CONFIDENCE` (`0.0`) — predictor-confidence gate; raise (e.g. `0.6`)
   to force manual review of low-confidence actions.
