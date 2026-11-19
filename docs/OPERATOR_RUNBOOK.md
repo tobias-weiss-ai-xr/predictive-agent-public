@@ -159,38 +159,33 @@ action's `should_execute()` before anything runs on a real cluster.
 
 ### FixImage pipeline (v4.1.0, deployed 2026-11-18)
 
-`FixImageAction` fixes image/DB-migration drift by applying the allowlisted
-image with `mode=patch` (`kubectl set image`) — there are **no GitOps writes**
-(no commits/pushes to the HRZ GitLab; the `gitops-repo` initContainer and the
-`fiximage-git` Secret volume were removed from the deployment).
+`FixImageAction` fixes image/DB-migration drift by applying an allowlisted
+image with `mode=patch` (`kubectl set image`) — **no GitOps writes** to the
+HRZ GitLab (the `gitops-repo` initContainer and `fiximage-git` Secret volume
+were removed).
 
-Corrected/updated image artifacts are produced by two equivalent image
-pipelines:
+Corrected/updated artifacts come from two equivalent image pipelines; both
+need the allowlisted tag/digest to already exist in the registry
+`172.25.24.36:5001`:
 
-1. **External CI (vhrz2392)** — `nix build .#predictive-agent` from the
-   private repo, relayed into the cluster registry `172.25.24.36:5001`.
-2. **In-cluster nix-builder** (`k8s/nix-builder/`, NS `nix-builder`, verified
-   2026-11-18) — `kubectl -n nix-builder exec deploy/nix-builder -- bash
-   /scripts/build-predictive-agent.sh <tag>` builds the public
-   `tobias-weiss-ai-xr/predictive-agent-public` repo and pushes it. Builds are
-   deterministic (pinned `flake.lock`; two runs produced the same manifest
-   digest).
+| Pipeline | Host | Source | Command | Artifact tag |
+|---|---|---|---|---|
+| External CI | vhrz2392 | private repo | `nix build .#predictive-agent` (+ relay) | `v4.1.0-nix` (stable) |
+| In-cluster builder | `nix-builder-0` (NS `nix-builder`) | public repos | `kubectl -n nix-builder exec deploy/nix-builder -- bash /scripts/build-{predictive-agent,open-webui}.sh` | `v4.1.0-nix-cN` / `v0.13.3-nix` |
 
-As of 2026-11-18 the live `FIX_IMAGE_TARGETS` entry (`open-webui`) points **by
-sha256 digest** at the artifact produced by the in-cluster nix-builder
-(`build-open-webui.sh`, digest `sha256:4aa9306b…`, verified byte-identical to
-the running Deployment image) — so FixImage now corrects image drift to the
-deterministic in-cluster artifact instead of an upstream re-tag.
+- Operator image: `build-predictive-agent.sh` builds the **public**
+  `tobias-weiss-ai-xr/predictive-agent-public` repo (deterministic via pinned
+  `flake.lock`). Its artifact may differ slightly from a private-repo build
+  (the whole source tree feeds the Nix hash) — tag it separately and point
+  `FIX_IMAGE_TARGETS` at the desired artifact.
+- FixImage targets: `build-open-webui.sh` builds the digest-pinned mirror
+  from `tobias-weiss-ai-xr/openEduSuite-nix-public` (recipes only; no SSH, no
+  Codeberg, no HRZ GitLab).
 
-The nix-builder recipe sources are fully public: the operator image from
-`tobias-weiss-ai-xr/predictive-agent-public`, the FixImage target images from
-`tobias-weiss-ai-xr/openEduSuite-nix-public` (image recipes only, no infra;
-no Codeberg, no SSH keys, no HRZ GitLab).
-
-Both pipelines need the allowlisted target tag to already exist in the
-registry. The in-cluster builder uses the **public** repo, so its artifact may
-differ slightly from a private-repo build — tag accordingly and point
-`FIX_IMAGE_TARGETS` at the desired artifact.
+As of 2026-11-18 the live `FIX_IMAGE_TARGETS` entry (`open-webui`) points
+**by sha256 digest** at the in-cluster artifact (`4aa9306b…`, verified
+byte-identical to the running Deployment image) — FixImage corrects image
+drift to the deterministic in-cluster artifact.
 
 Caveat: with `mode=patch`, an ArgoCD application whose policy reverts direct
 patches could undo the image change on the next selfHeal — re-drive the
