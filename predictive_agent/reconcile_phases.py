@@ -378,6 +378,10 @@ def evaluate_pods(
     at_risk_count = 0
     cycle_plans: dict = {}
     actions_executed_this_cycle = 0
+    # Flood guard (2026-11-19): escalated pods are aggregated per reconcile
+    # cycle and emitted as ONE remediation_exhausted summary, throttled 600s,
+    # instead of one webhook per pod.
+    escalated_this_cycle: list = []
 
     for pod in pod_items:
         # Handle degraded mode pods (use existing tracker data)
@@ -790,17 +794,14 @@ def evaluate_pods(
                                 "deterministic crash-loop). Escalating to human.",
                                 pod_key, futile_n,
                             )
-                            if ctx.notifier is not None:
-                                ctx.notifier.notify(
-                                    alert_type="remediation_exhausted",
-                                    pod_name=pod_key,
-                                    risk_score=result.risk_score,
-                                    action_taken="escalate",
-                                    details=(
-                                        f"{futile_n} consecutive at-risk cycles; planner: "
-                                        f"restart yields no durable P(FAILED) reduction"
-                                    ),
-                                )
+                            # Aggregated + throttled: after an operator restart the
+                            # in-memory futile counters reset, so a whole fleet can
+                            # re-escalate at once. Emitting one webhook per pod there
+                            # floods the alert channel (observed 2026-11-19: 85+ Matrix
+                            # messages in minutes). Collect per cycle and flush a single
+                            # summary notify below (throttled 600s).
+                            escalated_this_cycle.append((pod_key, futile_n,
+                                                         float(result.risk_score)))
                     except Exception as e:  # noqa: BLE001
                         logger.error("Remediation evaluation failed for %s: %s", pod_key, e)
 
@@ -879,6 +880,36 @@ def evaluate_pods(
                                 "Outcome notify failed for %s: %s", ev.get("kind"), e
                             )
                     ctx.remediation_manager.outcome_alerts.clear()
+
+    # ─── Aggregated escalation notify (flood control) ───────────────────────
+    # One remediation_exhausted summary per 600s window listing every pod that
+    # escalated this cycle. An operator restart resets the (in-memory) futile
+    # counters and makes the whole fleet re-escalate; without aggregation that
+    # is N webhooks -> the Matrix room floods. Consumers still get the full
+    # list, but as a single throttled message.
+    if escalated_this_cycle and ctx.notifier is not None:
+        try:
+            ts = time.time()
+            agg_key = "remediation_exhausted|aggregate"
+            last = ctx.last_autonomy_notify.get(agg_key)
+            if last is None or (ts - last[1]) > 600:
+                pods_list = ", ".join(pk for pk, _, _ in escalated_this_cycle)
+                max_risk = max((rs for _, _, rs in escalated_this_cycle), default=0.0)
+                ctx.notifier.notify(
+                    alert_type="remediation_exhausted",
+                    pod_name=f"{len(escalated_this_cycle)} pods",
+                    risk_score=max_risk,
+                    action_taken="escalate",
+                    details=(
+                        f"{len(escalated_this_cycle)} pod(s) escalated: {pods_list}. "
+                        "Consecutive at-risk cycles with no beneficial action "
+                        "(likely deterministic crash-loops); restart yields no "
+                        "durable P(FAILED) reduction."
+                    ),
+                )
+                ctx.last_autonomy_notify[agg_key] = ("remediation_exhausted", ts)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Aggregated escalation notify failed: %s", e)
 
     out.pods_tracked = pods_tracked
     out.at_risk_count = at_risk_count

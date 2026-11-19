@@ -952,3 +952,70 @@ def test_self_health_no_notifier_is_safe():
         assert phases.persist_state(ctx, 0) == 0  # no crash without notifier
     finally:
         phases.reset_self_health()
+
+
+# ── Escalation aggregation / flood control (2026-11-19) ───────────────────
+# After an operator restart the in-memory futile counters reset, so a whole
+# fleet of at-risk pods re-escalates at once. Previously each pod emitted its
+# own remediation_exhausted webhook -> the Matrix room got flooded (85+
+# messages in minutes). Escalations are now aggregated into ONE summary
+# notification per 600s window.
+
+
+def _escalating_ctx(notifier, num_pods=2):
+    """Ctx where every pod's remediation is exhausted (escalates)."""
+    model = StateModel()
+    predictor = Predictor(risk_threshold=0.0)
+    remediation = FakeRemediationManager()
+    remediation.plan_remediation.return_value = {"horizon": 1,
+                                                 "steps": [{"action": "restart"}]}
+    remediation.plan_and_execute.return_value = [MagicMock(action="none", success=False)]
+    remediation.note_remediation_outcome.return_value = (True, 3)
+    ctx = _build_ctx(state_model=model, predictor=predictor, notifier=notifier,
+                     remediation_manager=remediation, policy_engine=MockPolicy())
+    pods = []
+    for i in range(num_pods):
+        p = _healthy_pod()
+        p["metadata"] = {"name": f"loop-{i}", "namespace": "default",
+                         "creationTimestamp": "2024-01-01T00:00:00Z"}
+        pods.append(p)
+    return ctx, pods
+
+
+def _exhausted_calls(notifier):
+    return [c for c in notifier.notify.call_args_list
+            if c.kwargs.get("alert_type") == "remediation_exhausted"]
+
+
+def test_escalation_aggregates_multiple_pods_into_one_notification():
+    """N pods escalating in one cycle produce ONE summary webhook, not N."""
+    notifier = MagicMock()
+    ctx, pods = _escalating_ctx(notifier, num_pods=5)
+    phases.evaluate_pods(ctx, 1, "kubernetes", pods, {}, {}, set())
+    calls = _exhausted_calls(notifier)
+    assert len(calls) == 1, f"expected 1 aggregated webhook, got {len(calls)}"
+    details = calls[0].kwargs.get("details", "")
+    assert "loop-0" in details and "loop-4" in details
+    assert calls[0].kwargs["action_taken"] == "escalate"
+
+
+def test_escalation_aggregate_throttled_600s():
+    """A second escalating cycle within 600s does NOT re-notify (flood guard)."""
+    notifier = MagicMock()
+    ctx, pods = _escalating_ctx(notifier, num_pods=3)
+    phases.evaluate_pods(ctx, 1, "kubernetes", pods, {}, {}, set())
+    phases.evaluate_pods(ctx, 2, "kubernetes", pods, {}, {}, set())
+    assert len(_exhausted_calls(notifier)) == 1
+
+
+def test_escalation_aggregate_relaxes_after_window():
+    """After the 600s window a new escalation batch notifies again (still one)."""
+    notifier = MagicMock()
+    ctx, pods = _escalating_ctx(notifier, num_pods=2)
+    phases.evaluate_pods(ctx, 1, "kubernetes", pods, {}, {}, set())
+    # pretend >600s elapsed
+    for k in list(ctx.last_autonomy_notify.keys()):
+        kind, ts = ctx.last_autonomy_notify[k]
+        ctx.last_autonomy_notify[k] = (kind, ts - 601)
+    phases.evaluate_pods(ctx, 2, "kubernetes", pods, {}, {}, set())
+    assert len(_exhausted_calls(notifier)) == 2
