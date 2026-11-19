@@ -187,9 +187,19 @@ As of 2026-11-18 the live `FIX_IMAGE_TARGETS` entry (`open-webui`) points
 byte-identical to the running Deployment image) — FixImage corrects image
 drift to the deterministic in-cluster artifact.
 
-Caveat: with `mode=patch`, an ArgoCD application whose policy reverts direct
-patches could undo the image change on the next selfHeal — re-drive the
-allowlisted mapping through the regular git/ArgoCD flow when a fix must stick.
+Caveat (verified 2026-11-18 — these facts are live facts, not theoretical):
+the `openedusuite-llm` ArgoCD application has `selfHeal: true, prune: true`
+and its `ignoreDifferences` do **not** cover the deployment image — so a
+`mode=patch` image change on open-webui is reverted by the next selfHeal and
+becomes a ping-pong while the drift signature persists. Two ways to make a fix
+stick:
+
+1. Set the image in the Git manifest (`k8s/llm/open-webui.yaml`, pushed via
+   the HRZ Git repo — the operator itself never writes GitOps, but a *manual*
+   Git update by the operator/betreiber is the sanctioned path), or
+2. add a deployment `ignoreDifferences` jsonPointer for
+   `/spec/template/spec/containers/0/image` to the `openedusuite-llm` app so
+   `kubectl set image` is invisible to ArgoCD.
 
 Revert (failed verification): `fix_image` restores the previous image of the
 *target* container (the `prev_image` snapshot is captured per-container) and
