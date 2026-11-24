@@ -249,3 +249,32 @@ class TestPredictorWithNewSignals:
         assert result.cpu_trend == 0.0
         assert result.anomaly_score == 0.0
         assert result.blast_radius == 0
+
+    def test_restart_rate_below_floor_does_not_multiply(self):
+        """Stale restart signal (rate <= 0.1/hr) must not boost risk.
+
+        restart_rate = restart_count / pod_age decays toward 0 but never
+        reaches 0, so the >0 branch applied a permanent 3.0x likelihood
+        boost to any pod that ever restarted historically. Floor at
+        0.1/hr so the signal decays naturally with age.
+        """
+        base = dict(
+            memory_pct=20.0, memory_trend_mib_per_min=0.0,
+            memory_limit_mib=4096, memory_mib=800,
+            cpu_pct=20.0, cpu_trend_m_per_min=0.0, cpu_limit_m=1000,
+            restart_rate_per_hr=0.05, log_error_rate_per_min=0.0,
+            node_memory_pressure=False, node_disk_pressure=False,
+            memory_anomaly_score=0.0, cpu_anomaly_score=0.0,
+            blast_radius=0, pod_phase="Running", container_ready=True,
+            wait_state=None, terminated=False, terminated_reason=None,
+            pod_scheduled=True,
+        )
+        from predictive_agent.risk import calculate_risk
+        low = calculate_risk(base, "HEALTHY", 0.0, 0.0)
+        fresh = calculate_risk({**base, "restart_rate_per_hr": 0.5}, "HEALTHY", 0.0, 0.0)
+        # 0.5/hr is a real restart signal and must multiply 3x
+        assert fresh > low * 2.0
+        # and the stale-floor case equals the no-restart case
+        none = calculate_risk({**base, "restart_rate_per_hr": 0.0}, "HEALTHY", 0.0, 0.0)
+        assert low == none
+

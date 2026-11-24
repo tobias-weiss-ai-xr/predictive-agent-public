@@ -893,3 +893,49 @@ def test_matches_selectors_name_with_slash():
     container = {"ID": "abc123", "Names": "/web-1"}
     selectors = {"labels": {}, "compose_projects": [], "names": ["web-*"]}
     assert _matches_selectors(container, selectors) is True
+
+
+def test_count_log_errors_dedup_repeated_identical_messages():
+    """Repeated identical error lines are one error condition, not N.
+
+    A crash-loop or a recurring operator message spamming the same text
+    dozens of times in a tail pins otherwise-healthy pods
+    DEGRADED/STRESSED forever. The same token repeated must count once.
+    """
+    logs = (
+        "ERROR: ConfigMap cnpg-default-monitoring not found\n" * 39
+    )
+    assert count_log_errors(logs) == 1
+
+    # Different error tokens still count individually.
+    logs2 = (
+        "ERROR: connection refused\n"
+        "ERROR: connection refused\n"
+        "FATAL: out of memory\n"
+    )
+    assert count_log_errors(logs2) == 2
+
+
+def test_count_log_errors_structured_json_uses_level_field():
+    """Structured JSON logs: count by the 'level' field, not stacktraces.
+
+    A JSON line with level=info but a Go stacktrace method named
+    '(*logger).Error' must NOT count; a level=error line must count once.
+    """
+    info_with_stacktrace = (
+        '{"level":"info","msg":"all good",'
+        '"stacktrace":"github.com/foo/machinery/pkg/log.(*logger).Error"}'
+    )
+    error_json = '{"level":"error","msg":"ConfigMap not found"}'
+    assert count_log_errors(info_with_stacktrace) == 0
+    assert count_log_errors(error_json) == 1
+
+
+def test_count_log_errors_distinct_messages_all_count():
+    """Different error messages still all count."""
+    logs = (
+        '{"level":"error","msg":"ConfigMap not found"}\n'
+        '{"level":"error","msg":"Connection refused"}\n'
+        "Traceback (most recent call last):\n"
+    )
+    assert count_log_errors(logs) == 3

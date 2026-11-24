@@ -56,14 +56,19 @@ def classify_state(memory_pct, cpu_pct, restart_rate, log_errors, node_pressure,
     elif cpu_pct > 40:
         score += 1
 
-    # Restart scoring
+    # Restart scoring. restart_rate = restart_count / pod_age_hours, which
+    # decays toward 0 but never reaches it, so the old `> 0` branch parked a
+    # permanent +1 on any pod that ever restarted (stale-signal trap, observed
+    # 2026-11-24 with csi-nfs 26 restarts/66d). High tiers still penalize
+    # genuine crash-loops; only the stale tail (<= 0.1/hr, 1 restart per 10h)
+    # is allowed to decay naturally with age.
     if restart_rate > 5:
         score += 4
     elif restart_rate > 3:
         score += 3
     elif restart_rate > 1:
         score += 2
-    elif restart_rate > 0:
+    elif restart_rate > 0.1:
         score += 1
 
     # Log errors scoring

@@ -173,3 +173,46 @@ def test_state_model_markov_learning():
                        cpu_m=100, restart_count=0, log_errors=0,
                        node_pressure=False)
     assert sm.markov.total_transitions >= 0  # May or may not transition
+
+
+def test_classify_state_low_restart_rate_not_penalized():
+    """Restart rates below 0.1/hr (1 restart per 10h) are background noise.
+
+    restart_rate = restart_count / pod_age decays toward 0 but never reaches
+    it, so the previous `> 0` branch applied a permanent classify penalty to
+    any pod that ever restarted. Floor at a meaningful threshold so the
+    stale-restart signal decays naturally with age.
+    """
+    # HEALTHY anchor + tiny stale rate must stay HEALTHY (this passed before
+    # too, but documents the intent)
+    assert classify_state(
+        memory_pct=30.0, cpu_pct=20.0, restart_rate=0.05,
+        log_errors=0, node_pressure=False, markov_state="HEALTHY",
+    ) == "HEALTHY"
+    # A pod stranded in DEGRADED with a stale restart and nothing else wrong
+    # must be allowed to decay back to HEALTHY (previously the >0 restart
+    # branch kept it pinned: DEGRADED(|1) + restart(|1) => score 2/3 boundary
+    # plus hysteresis made recovery depend on the markov anchor).
+    assert classify_state(
+        memory_pct=30.0, cpu_pct=20.0, restart_rate=0.05,
+        log_errors=0, node_pressure=False, markov_state="DEGRADED",
+    ) == "HEALTHY"
+
+
+def test_classify_state_fresh_restart_still_penalized():
+    """A genuinely recent restart (rate > 1/hr) still counts.
+
+    classify_state alone only cross 3-retakes with multiple signals; the
+    real fresh-restart escalation lives in the risk multiplier. Here a
+    >1/hr rate on top of a DEGRADED anchor must at least reach DEGRADED.
+    """
+    assert classify_state(
+        memory_pct=30.0, cpu_pct=20.0, restart_rate=2.0,
+        log_errors=0, node_pressure=False, markov_state="DEGRADED",
+    ) == "DEGRADED"
+    # Below the floor (<=0.1/hr) with a DEGRADED anchor decays to HEALTHY —
+    # stale restart must not keep the pod pinned.
+    assert classify_state(
+        memory_pct=30.0, cpu_pct=20.0, restart_rate=0.05,
+        log_errors=0, node_pressure=False, markov_state="DEGRADED",
+    ) == "HEALTHY"

@@ -348,11 +348,52 @@ def get_node_conditions(node_json):
 
 
 def count_log_errors(log_text):
-    """Count error-level log lines."""
+    """Count distinct error conditions in a log tail.
+
+    Two guards against false positives that kept healthy pods pinned
+    DEGRADED/STRESSED (observed 2026-11-24: CNPG logged the same benign
+    'ConfigMap cnpg-default-monitoring not found' 39x per 100 lines):
+
+    1. Structured JSON logs are classified by their ``level`` field, never
+       by scanning the whole line. A stacktrace containing a method named
+       ``(*logger).Error`` inside an otherwise-info line is not an error.
+    2. Repeated identical lines count as ONE condition (a crash-loop or
+       recurring operator message spamming the same text is one thing,
+       not N things). Distinct messages each count still count.
+    """
+    seen: set = set()
     count = 0
     for line in log_text.split("\n"):
-        if _ERROR_RE.search(line):
-            count += 1
+        line = line.strip()
+        if not line:
+            continue
+        # Structured JSON: trust the level field.
+        if line.startswith("{"):
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                pass
+            else:
+                lvl = str(rec.get("level", "")).lower()
+                if lvl not in ("error", "fatal", "panic", "emerg", "critical"):
+                    continue
+                msg = rec.get("msg")
+                if msg is None:
+                    continue
+                json_key = ("json", lvl, str(msg).strip())
+                if json_key not in seen:
+                    seen.add(json_key)
+                    count += 1
+                continue
+        # Plain-text line: fall back to the classic regex, deduping by the
+        # full line so a repeating message (identical text) is counted once
+        # while genuinely distinct error lines still each count.
+        m = _ERROR_RE.search(line)
+        if m:
+            line_key = ("line", line)
+            if line_key not in seen:
+                seen.add(line_key)
+                count += 1
     return count
 
 

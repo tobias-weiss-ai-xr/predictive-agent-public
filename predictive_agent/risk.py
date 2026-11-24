@@ -95,15 +95,19 @@ def calculate_risk(pod_metrics, markov_state, markov_p_critical, markov_p_failed
     elif cpu_trend_norm > 20:
         lr *= 1.3
 
-    # Restart rate (any restart is a strong signal — backtester shows
-    # restart_count > 0 correlates with actual failures)
+    # Restart rate. restart_rate = restart_count / pod_age_hours decays toward
+    # 0 but never reaches it, so the old `> 0` branch applied a permanent
+    # 3.0x multiplier to any pod that ever restarted (stale-signal trap,
+    # observed 2026-11-24: csi-nfs 26 restarts over 66d => 0.016/hr stayed
+    # boosted forever). Floor at 0.1/hr so historical restarts decay with age,
+    # while recently-crashing pods keep the strong multipliers.
     if restart_rate > 5:
         lr *= 15.0
     elif restart_rate > 3:
         lr *= 10.0
     elif restart_rate > 1:
         lr *= 6.0
-    elif restart_rate > 0:
+    elif restart_rate > 0.1:
         lr *= 3.0
 
     # Log errors
