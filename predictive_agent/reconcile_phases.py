@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from predictive_agent import config
-from predictive_agent.collector import docker_status_signals
+from predictive_agent.collector import container_restarted_recently, docker_status_signals
 from predictive_agent.pod_collection import kubectl_binary_missing
 from predictive_agent.self_health import DegradedCycleTracker, SelfHealthAlerter
 
@@ -541,12 +541,24 @@ def evaluate_pods(
             terminated_reason = status_signals["terminated_reason"]
             pod_scheduled = status_signals["pod_scheduled"]
 
-            # Collect log errors (skip for certain statuses to save API calls)
+            # Collect log errors (skip for certain statuses to save API calls).
+            # Optimization (2026-11-24): only fetch logs when a container is
+            # not-ready (live problem) or restarted within LOG_FETCH_WINDOW_MINUTES.
+            # A pod with restartCount>0 from days ago (e.g. csi-nfs 26
+            # restarts/66d) no longer triggers a kubectl logs subprocess every
+            # cycle — stale restarts are captured by restart_rate already, and
+            # fetching for all candidates (343 cluster-wide incl. 225 Succeeded
+            # leftovers) pushed reconcile to 75s > 60s interval.
             log_errors = 0
             if pod_phase not in config.SKIP_LOGS_STATUSES:
                 container_statuses = pod.get("status", {}).get("containerStatuses", [])
                 for cs in container_statuses:
-                    if cs.get("ready", False) is False or cs.get("restartCount", 0) > 0:
+                    if cs.get("ready", False) is False or (
+                        cs.get("restartCount", 0) > 0
+                        and container_restarted_recently(
+                            cs, window_minutes=config.LOG_FETCH_WINDOW_MINUTES
+                        )
+                    ):
                         rc_logs, logs_output, _ = ctx.run_cmd(
                             ["kubectl", "logs", "-n", ns, name, "--tail=50"],
                             timeout=5,

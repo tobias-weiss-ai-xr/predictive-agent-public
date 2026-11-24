@@ -939,3 +939,29 @@ def test_count_log_errors_distinct_messages_all_count():
         "Traceback (most recent call last):\n"
     )
     assert count_log_errors(logs) == 3
+
+
+def test_should_fetch_logs_stale_restart_no_fetch():
+    """A container that restarted days ago must not trigger a log fetch.
+
+    csi-nfs had 26 restarts over 66 days (~0.016/hr). The old code fetched
+    `kubectl logs` for ANY pod with restartCount>0 every 60s reconcile,
+    which (with 343 cluster-wide candidates, incl. 225 Succeeded leftovers)
+    pushed reconcile past the 60s interval and saturated the operator CPU.
+    """
+    import datetime
+
+    from predictive_agent.collector import container_restarted_recently
+    now = datetime.datetime.now(datetime.timezone.utc)
+    old = (now - datetime.timedelta(days=4)).isoformat().replace("+00:00", "Z")
+    fresh = (now - datetime.timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    assert not container_restarted_recently(
+        {"state": {"running": {"startedAt": old}}}, now=now
+    )
+    assert container_restarted_recently(
+        {"state": {"running": {"startedAt": fresh}}}, now=now
+    )
+    # terminated (crashed now) counts as recent too
+    assert container_restarted_recently(
+        {"state": {"terminated": {"startedAt": old, "finishedAt": fresh}}}, now=now
+    )

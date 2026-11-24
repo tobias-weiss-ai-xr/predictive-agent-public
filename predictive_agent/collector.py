@@ -347,6 +347,40 @@ def get_node_conditions(node_json):
     return conditions
 
 
+def container_restarted_recently(
+    container_status: dict,
+    now=None,
+    window_minutes: int = 120,
+) -> bool:
+    """True if the container's most recent (re)start landed inside the window.
+
+    Uses ``state.running.startedAt`` for the running container, and
+    ``state.terminated.finishedAt`` (falling back to its startedAt) for a
+    terminated one. A pod that restarted days ago is ``False`` even when
+    restartCount > 0, so the per-cycle log fetch is skipped: stale restarts
+    are already captured by restart_rate, and fetching `kubectl logs` for
+    hundreds of such pods every reconcile pushed cycles past the 60s
+    interval (observed 2026-11-24: 343 candidates incl. 225 Succeeded
+    leftovers, reconcile 75s vs 60s interval, operator CPU pinned at limit).
+    """
+    import datetime as _dt
+    if now is None:
+        now = _dt.datetime.now(_dt.timezone.utc)
+    state = container_status.get("state", {}) or {}
+    running = state.get("running", {}) or {}
+    terminated = state.get("terminated", {}) or {}
+    ts_str = running.get("startedAt") or terminated.get("finishedAt")         or terminated.get("startedAt")
+    if not ts_str:
+        # No start info (waiting/unknown) — treat as recent so a genuinely
+        # stuck container still gets its logs fetched.
+        return True
+    try:
+        ts = _dt.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return True
+    return (now - ts).total_seconds() < window_minutes * 60
+
+
 def count_log_errors(log_text):
     """Count distinct error conditions in a log tail.
 

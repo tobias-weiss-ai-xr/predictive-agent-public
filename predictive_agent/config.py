@@ -114,7 +114,14 @@ UNHEALTHY_STATUSES = {
 SKIP_LOGS_STATUSES = {
     "ImagePullBackOff", "ErrImagePull", "ContainerCreating",
     "PodInitializing", "CreateContainerError", "CreateContainerConfigError", "Pending",
+    "Succeeded",
 }
+
+# Only fetch container logs when the last (re)start is newer than this
+# window (minutes). Stale restarts (restartCount > 0 from days ago) are
+# already captured by restart_rate; re-fetching logs for them every cycle
+# was the dominant reconcile cost.
+LOG_FETCH_WINDOW_MINUTES = int(os.environ.get("LOG_FETCH_WINDOW_MINUTES", "120"))
 
 # ─── Markov States ───────────────────────────────────────────────────────────
 MARKOV_STATES = ["HEALTHY", "DEGRADED", "STRESSED", "CRITICAL", "FAILED", "RECOVERED"]
