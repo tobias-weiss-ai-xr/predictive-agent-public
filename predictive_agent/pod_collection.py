@@ -249,9 +249,25 @@ def is_pod_excluded(pod: dict) -> bool:
 def get_rs_json() -> dict:
     """Fetch ReplicaSet list across the cluster as JSON (for ghost-pod
     detection — which RS are scaled to 0). Never raises: on any failure the
-    caller falls back to "no ghosts detected by owner"."""
+    caller falls back to "no ghosts detected by owner".
+
+    Performance (2026-11-24): ``run_cmd`` caches the *raw stdout string*
+    only; re-running ``json.loads`` on a multi-MB RS blob per call cost
+    ~169ms each (82.9s of a 117s reconcile when called per pod). The parsed
+    dict is memoized for the same TTL the kubectl cache uses, so parsing
+    happens at most once per window regardless of callers.
+    """
+    import time as _time
+
     from predictive_agent import main  # deferred: late-bound patch target
 
+    # Memoize the parsed result (raw stdout may be cached by run_cmd, but
+    # parsing is the expensive part). One RS list is enough; staleness is
+    # bounded by the same 30s window the kubectl cache uses.
+    global _RS_JSON_CACHE, _RS_JSON_CACHE_TS
+    if _RS_JSON_CACHE is not None and _RS_JSON_CACHE_TS is not None:
+        if _time.time() - _RS_JSON_CACHE_TS < 30.0:
+            return _RS_JSON_CACHE
     try:
         if kubectl_binary_missing():
             return {"items": []}
@@ -261,9 +277,17 @@ def get_rs_json() -> dict:
         if rc != 0 or not stdout:
             return {"items": []}
         parsed = json.loads(stdout)
-        return parsed if isinstance(parsed, dict) else {"items": []}
+        result = parsed if isinstance(parsed, dict) else {"items": []}
+        _RS_JSON_CACHE = result
+        _RS_JSON_CACHE_TS = _time.time()
+        return result
     except Exception:  # noqa: BLE001 - ghost detection must degrade, not crash
         return {"items": []}
+
+
+# Parsed-RS memo (see get_rs_json).
+_RS_JSON_CACHE: Optional[dict] = None
+_RS_JSON_CACHE_TS: Optional[float] = None
 
 
 def get_ghost_replicasets(rs_json: dict) -> Set[str]:

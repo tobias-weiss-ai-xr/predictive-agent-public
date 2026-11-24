@@ -376,3 +376,43 @@ def test_is_pod_excluded_missing_metadata(monkeypatch):
     monkeypatch.setattr(config, "EXCLUDED_POD_LABELS", {"kubevirt.io": "virt-launcher"})
     monkeypatch.setattr(config, "EXCLUDED_POD_ANNOTATIONS", {})
     assert pod_collection.is_pod_excluded({}) is False
+
+
+def test_get_rs_json_parses_once_within_window(monkeypatch):
+    """get_rs_json must not json.loads a 9.47MB blob per call.
+
+    run_cmd caches the raw stdout string only; re-parsing it on every
+    call cost ~168ms * (calls per cycle) of pure CPU. The parsed dict is
+    memoized with the same TTL as the kubectl cache.
+    """
+    import predictive_agent.pod_collection as pc
+    from predictive_agent import pod_collection
+
+    # Reset the module-level parsed memo so earlier tests' run_cmd mocks
+    # cannot bleed a cached {"items": []} into this one.
+    pc._RS_JSON_CACHE = None
+    pc._RS_JSON_CACHE_TS = None
+
+    parse_count = {"n": 0}
+    real_json_loads = pc.json.loads
+    def counting_loads(s):
+        parse_count["n"] += 1
+        return real_json_loads(s)
+
+    monkeypatch.setattr(pc, "json", type("J", (), {"loads": staticmethod(counting_loads)}))
+    monkeypatch.setattr(pc, "kubectl_binary_missing", lambda: False)
+
+    payload = '{"items": [{"metadata": {"name": "r1", "namespace": "ns"}, "spec": {"replicas": 0}}]}'
+    def fake_run_cmd(cmd, timeout=10, use_cache=True, cache_ttl=30.0):
+        return (0, payload, "")
+
+    import predictive_agent.main as main_mod
+    monkeypatch.setattr(main_mod, "run_cmd", fake_run_cmd)
+
+    # First call parses once; subsequent calls hit the memo.
+    d1 = pod_collection.get_rs_json()
+    d2 = pod_collection.get_rs_json()
+    pod_collection.get_rs_json()
+    assert d1 == d2 == {"items": [{"metadata": {"name": "r1", "namespace": "ns"},
+                                   "spec": {"replicas": 0}}]}
+    assert parse_count["n"] == 1, f"parsed {parse_count['n']} times"

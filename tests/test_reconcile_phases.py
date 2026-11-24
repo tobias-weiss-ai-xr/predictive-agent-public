@@ -1226,3 +1226,58 @@ def test_escalation_aggregate_relaxes_after_window():
         ctx.last_autonomy_notify[k] = (kind, ts - 601)
     phases.evaluate_pods(ctx, 2, "kubernetes", pods, {}, {}, set())
     assert len(_exhausted_calls(notifier)) == 2
+
+
+def test_evaluate_pods_fetches_rs_json_once(monkeypatch, basic_state_model):
+    """Ghost detection must not re-parse a 9.47MB RS JSON per pod.
+
+    Observed 2026-11-24: get_rs_json() runs json.loads on every call, and
+    evaluate_pods called it in the per-pod loop (line 413) -> ~520+ parses
+    of a 9.47MB blob per 60s cycle (raw_decode 82.9s of a 117s reconcile),
+    keeping the operator CPU-saturated even after log-fetch gating.
+    """
+    calls = {"n": 0}
+
+    def counting_rs_json():
+        calls["n"] += 1
+        return {"items": []}
+
+    ctx = _build_ctx(
+        state_model=basic_state_model,
+        policy_engine=MockPolicy(),
+        get_rs_json=counting_rs_json,
+        is_pod_ghost=pod_collection.is_pod_ghost,
+        run_cmd=lambda cmd, timeout=5: (0, "", ""),
+        get_pod_status_signals=lambda pod: {
+            "pod_phase": "Running", "container_ready": True,
+            "wait_state": None, "terminated": False,
+            "terminated_reason": None, "pod_scheduled": True},
+        get_pod_memory_limit=lambda pod: 1024,
+        get_pod_cpu_limit=lambda pod: 1000,
+        get_node_pressure=lambda nc, node: (False, False),
+        should_skip_namespace=lambda ns: False,
+        is_pod_excluded=lambda pod: False,
+        get_pod_restart_count=lambda pod: 0,
+        count_log_errors=lambda text: 0,
+    )
+
+    pods = [
+        {"metadata": {"namespace": "ns1", "name": "p1",
+                      "ownerReferences": [{"kind": "ReplicaSet", "name": "r1"}]},
+         "spec": {"nodeName": "n1"},
+         "status": {"phase": "Running",
+                    "containerStatuses": [{"ready": True, "restartCount": 0}]}},
+        {"metadata": {"namespace": "ns1", "name": "p2",
+                      "ownerReferences": [{"kind": "ReplicaSet", "name": "r2"}]},
+         "spec": {"nodeName": "n1"},
+         "status": {"phase": "Running",
+                    "containerStatuses": [{"ready": True, "restartCount": 0}]}},
+    ]
+    phases.evaluate_pods(
+        ctx, 1, "kubernetes", pods,
+        pod_metrics={"ns1/p1": {"cpu_m": 10, "memory_mib": 10},
+                     "ns1/p2": {"cpu_m": 10, "memory_mib": 10}},
+        node_conditions={}, current_keys=set(),
+    )
+    # The RS list must be fetched exactly once for the whole loop.
+    assert calls["n"] == 1, f"get_rs_json called {calls['n']} times"

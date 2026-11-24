@@ -400,6 +400,9 @@ def evaluate_pods(
     at_risk_count = 0
     cycle_plans: dict = {}
     actions_executed_this_cycle = 0
+    # RS list for ghost detection — fetched lazily on first use, then reused
+    # for the whole cycle (see note at the loop). None = not fetched yet.
+    ghost_rs_json: Optional[dict] = None
     # Flood guard (2026-11-19): escalated pods are aggregated per reconcile
     # cycle and emitted as ONE remediation_exhausted summary, throttled 600s,
     # instead of one webhook per pod.
@@ -410,7 +413,17 @@ def evaluate_pods(
         # evaluate loop entirely — defense-in-depth after collect filtering
         # (see collect_metrics). They are not actionable; scoring/escalating
         # them re-triggers escalations for leftovers from old revisions.
-        if ctx.is_pod_ghost(pod, ctx.get_rs_json()):
+        # Explicit ReuseTask (2026-11-24): fetch the ReplicaSet list ONCE per
+        # cycle, not per pod. get_rs_json re-parses the full RS JSON (9.47MB)
+        # on every call (run_cmd only caches the raw stdout string), which
+        # cost ~169ms/pod -> 82.9s of the 117s reconcile if called in the
+        # loop. Hoisting mirrors the collect-phase pattern at line 255.
+        if ghost_rs_json is None and pod_items:
+            try:
+                ghost_rs_json = ctx.get_rs_json()
+            except Exception:  # noqa: BLE001 - ghost detection must not fail
+                ghost_rs_json = {"items": []}
+        if ctx.is_pod_ghost(pod, ghost_rs_json):
             continue
         # Handle degraded mode pods (use existing tracker data)
         if pod.get("_degraded_mode"):
