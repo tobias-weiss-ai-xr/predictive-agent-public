@@ -65,7 +65,7 @@ let
 in
 pkgs.dockerTools.buildLayeredImage {
   name = "predictive-agent";
-  tag = "v4.1.1-nix";
+  tag = "v4.1.2-nix";
 
   contents = with pkgs; [
     python3  # AlertWatch uses stdlib urllib only (no requests in the image)
@@ -95,7 +95,7 @@ pkgs.dockerTools.buildLayeredImage {
     ];
     Cmd = [];
     Env = [
-      "OPERATOR_VERSION=4.1.1"
+      "OPERATOR_VERSION=4.1.2"
       "OPERATOR_NAME=predictive-agent"
       "OPERATOR_NAMESPACE=predictive-agent"
       "OPERATOR_WATCH_NAMESPACES=openedusuite,default,llm"

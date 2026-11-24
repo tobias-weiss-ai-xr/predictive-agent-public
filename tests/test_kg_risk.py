@@ -129,6 +129,37 @@ class TestRiskWithAnomalyAndBlastRadius:
         )
         assert risk_high > risk_low
 
+    def test_cpu_trend_normalized_against_cpu_limit(self):
+        """cpu_trend thresholds are single-core calibrated: a 60 m/min trend is
+        alarming on a 1-core pod but trivial on a 16-core pod (mirror of the
+        cpu_pct / summed-CPU-limit fix)."""
+        base_metrics = {
+            "memory_pct": 50.0,
+            "cpu_pct": 40.0,
+            "restart_rate_per_hr": 0.0,
+            "log_error_rate_per_min": 0.0,
+            "cpu_trend_m_per_min": 60.0,
+        }
+        risk_1core = calculate_risk(
+            {**base_metrics, "cpu_limit_m": 1000}, "HEALTHY", 0.0, 0.0
+        )
+        risk_16core = calculate_risk(
+            {**base_metrics, "cpu_limit_m": 16000}, "HEALTHY", 0.0, 0.0
+        )
+        risk_no_limit = calculate_risk(
+            {**base_metrics, "cpu_limit_m": 0}, "HEALTHY", 0.0, 0.0
+        )
+        # 60 m/min = 6% of a single core per minute → trips the >50 threshold
+        assert risk_1core > risk_16core
+        # 60 m/min on 16 cores = ~3.75 single-core-equivalent → no trip
+        unboosted = calculate_risk(
+            {**base_metrics, "cpu_trend_m_per_min": 0.0, "cpu_limit_m": 16000},
+            "HEALTHY", 0.0, 0.0,
+        )
+        assert risk_16core == pytest.approx(unboosted, abs=1e-9)
+        # Missing/zero limit falls back to single-core (default) calibration
+        assert risk_no_limit == pytest.approx(risk_1core, abs=1e-9)
+
 
 class TestPredictorWithNewSignals:
     """Test that the predictor accepts and stores new signals."""

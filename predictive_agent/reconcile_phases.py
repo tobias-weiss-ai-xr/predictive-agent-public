@@ -430,6 +430,7 @@ def evaluate_pods(
             cpu_m = getattr(tracker, "cpu_m", 0)
             memory_mib = getattr(tracker, "memory_mib", 0)
             memory_limit_mib = getattr(tracker, "memory_limit_mib", 0)
+            cpu_limit_m = getattr(tracker, "cpu_limit_m", 1000)
             mem_pressure = False  # No node pressure info in degraded mode
             disk_pressure = False
             pod_phase = "Unknown"
@@ -651,6 +652,7 @@ def evaluate_pods(
                 markov_p_critical=markov_p_critical,
                 markov_p_failed=markov_p_failed,
                 cpu_trend_m_per_min=tracker.cpu_trend,
+                cpu_limit_m=cpu_limit_m,
                 memory_anomaly_score=tracker.memory_anomaly_score,
                 cpu_anomaly_score=tracker.cpu_anomaly_score,
                 blast_radius=blast_radius,
