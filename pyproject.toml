@@ -1,6 +1,6 @@
 [project]
 name = "predictive-agent"
-version = "4.1.0"
+version = "4.1.1"
 description = "Predictive Kubernetes health monitor — Kalman filter, Markov chain, Bayesian risk scoring"
 requires-python = ">=3.11"
 dependencies = [
@@ -113,7 +113,7 @@ exclude = ["tests/", "k8s/"]
 
 [tool.mutmut]
 # Mutation-testing campaign scoped to the freshly-extracted, safety-critical
-# phase modules (see openspec change tier-2-mutation-testing). Run on edge-node:
+# phase modules (see openspec change tier-2-mutation-testing). Run on legion:
 #   python -m mutmut run
 #   python -m mutmut results
 source_paths = [
@@ -122,7 +122,7 @@ source_paths = [
     "predictive_agent/bootstrap.py",
 ]
 # Full suite minus env-flaky files (server port binds + timing benchmarks
-# fail on the shared edge-node runner). Everything else exercises the mutated
+# fail on the shared legion runner). Everything else exercises the mutated
 # phase modules through the facade, integration, and contract suites.
 pytest_add_cli_args_test_selection = ["tests/"]
 pytest_add_cli_args = [

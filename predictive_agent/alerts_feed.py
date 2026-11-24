@@ -26,8 +26,6 @@ from base64 import b64encode
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from predictive_agent import config
-
 logger = logging.getLogger(__name__)
 
 # ceph_health_status prometheus metric: 1=OK, 2=WARN, 3=ERR
@@ -114,7 +112,7 @@ class AlertFeed:
             url = url + sep + urlencode(params)
         request = Request(url)
         if auth and auth[0]:
-            token = b64encode(f"{auth[0]}:{auth[1] or ''}".encode("utf-8")).decode("ascii")
+            token = b64encode(f"{auth[0]}:{auth[1] or ''}".encode()).decode("ascii")
             request.add_header("Authorization", f"Basic {token}")
         try:
             with urlopen(request, timeout=self.timeout_s) as resp:

@@ -95,6 +95,42 @@ def test_pod_tracker_ttf():
     assert ttf > 0
 
 
+def test_pod_tracker_cpu_pct_normalized_against_cpu_limit():
+    """cpu_pct must be normalized against the pod's summed CPU limit, not a
+    hardcoded single core. A 16-core LLM pod at ~11.8 cores is ~74% busy, not
+    1180% saturated — the old formula mis-scored it as >95% CPU and drove
+    risk/state to DEGRADED/CRITICAL (ollama-next-0 false positive)."""
+    pt = PodTracker("llm", "ollama-next-0")
+    pt.update(
+        memory_mib=29244, memory_limit_mib=65536,
+        cpu_m=11800, restart_count=0, log_errors=0,
+        node_pressure=False, cpu_limit_m=16000
+    )
+    assert pt.memory_pct == pytest.approx(44.6, abs=0.5)
+    # 11800m of a 16000m limit = 73.75% (was 1180% with the old 1-core math)
+    assert pt.cpu_pct == pytest.approx(73.75, abs=0.5)
+    assert pt.cpu_pct < 95  # no longer "CPU saturated" under the risk model
+
+
+def test_pod_tracker_cpu_pct_defaults_to_single_core_when_limit_unknown():
+    """Without a cpu_limit_m the previous behaviour (1 core = 100%) is kept,
+    so existing callers and pods without CPU limits behave unchanged."""
+    pt = PodTracker("ns", "pod-0")
+    pt.update(memory_mib=500, memory_limit_mib=1024, cpu_m=100,
+              restart_count=0, log_errors=0, node_pressure=False)
+    assert pt.cpu_pct == pytest.approx(10.0, abs=0.1)
+
+
+def test_pod_tracker_cpu_pct_ignores_zero_limit():
+    """A zero/absent CPU limit must not give 0% (which would look healthy) —
+    fall back to the single-core default instead."""
+    pt = PodTracker("ns", "pod-0")
+    pt.update(memory_mib=500, memory_limit_mib=1024, cpu_m=500,
+              restart_count=0, log_errors=0, node_pressure=False,
+              cpu_limit_m=0)
+    assert pt.cpu_pct == pytest.approx(50.0, abs=0.1)
+
+
 def test_state_model_creation():
     """Test StateModel creation."""
     sm = StateModel()

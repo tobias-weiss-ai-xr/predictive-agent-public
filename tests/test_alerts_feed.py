@@ -12,11 +12,11 @@ Covers:
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from predictive_agent.alerts_feed import (
-    AlertFeed,
     STATUS_ORDER,
+    AlertFeed,
     parse_alertmanager_alerts,
     parse_ceph_health,
 )

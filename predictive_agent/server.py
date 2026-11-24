@@ -9,9 +9,9 @@ empty defaults so the server always responds correctly.
 """
 
 import json
-import sys
 import logging
 import socketserver
+import sys
 import threading
 import time
 from dataclasses import asdict, is_dataclass

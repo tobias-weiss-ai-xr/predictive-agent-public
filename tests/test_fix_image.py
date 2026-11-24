@@ -31,7 +31,7 @@ TARGETS = [
         "namespace": "llm",
         "deployment": "open-webui",
         "container": "open-webui",
-        "image": "registry.example.com:5001/openedusuite-nix/open-webui:v0.13.3-nix",
+        "image": "172.25.24.36:5001/openedusuite-nix/open-webui:v0.13.3-nix",
         "mode": "patch",
     }
 ]
@@ -215,7 +215,7 @@ class TestExecuteGitOpsMode:
             "namespace": "llm",
             "deployment": "open-webui",
             "container": "open-webui",
-            "image": "registry.example.com:5001/openedusuite-nix/open-webui:v0.13.3-nix",
+            "image": "172.25.24.36:5001/openedusuite-nix/open-webui:v0.13.3-nix",
             "mode": "gitops",
         }
     ]
@@ -230,7 +230,7 @@ class TestExecuteGitOpsMode:
         "    spec:\n"
         "      containers:\n"
         "      - name: open-webui\n"
-        "        image: registry.example.com:5001/open-webui/open-webui@sha256:old\n"
+        "        image: 172.25.24.36:5001/open-webui/open-webui@sha256:old\n"
     )
 
     @patch("predictive_agent.actions.fix_image.resolve_deployment_name")
@@ -302,7 +302,7 @@ class TestExecuteGitOpsMode:
     def test_replace_image_line_pure(self):
         from predictive_agent.actions.fix_image import replace_image_line
         out, old = replace_image_line(self.MANIFEST, "new-img:1")
-        assert old == "registry.example.com:5001/open-webui/open-webui@sha256:old"
+        assert old == "172.25.24.36:5001/open-webui/open-webui@sha256:old"
         assert "image: new-img:1" in out
         assert "sha256:old" not in out
 
@@ -328,3 +328,97 @@ class TestRevert:
         assert res is not None
         assert res.success is True
         assert "old-image:tag" in res.command
+
+    @patch("predictive_agent.actions.fix_image.resolve_deployment_name")
+    @patch("predictive_agent.actions.fix_image.subprocess.run")
+    def test_revert_resolves_deployment_from_pod_name(self, mock_run, mock_resolve):
+        """Verification loop passes the POD name; revert must resolve the
+        owning deployment (was a bug: kubectl set image deployment/<pod>)."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        mock_resolve.return_value = "open-webui"
+        action = FixImageAction(targets=TARGETS, enabled=True)
+        prev = {
+            "desired_state": {
+                "prev_image": "old-image:v1", "mode": "patch", "container": "open-webui"
+            }
+        }
+        res = action.revert("open-webui-6f9b4c8d5e-abc12", prev,
+                            ActionContext(namespace="llm", dry_run=False))
+        assert res is not None and res.success is True
+        assert "deployment/open-webui" in res.command
+        assert "open-webui=old-image:v1" in res.command
+        mock_resolve.assert_called_once()
+
+    @patch("predictive_agent.actions.fix_image.resolve_deployment_name")
+    @patch("predictive_agent.actions.fix_image.subprocess.run")
+    def test_revert_containerless_prev_image(self, mock_run, mock_resolve):
+        """Legacy records without a container still revert (deployment-scoped)."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        mock_resolve.return_value = "open-webui"
+        action = FixImageAction(targets=TARGETS, enabled=True)
+        prev = {"desired_state": {"prev_image": "old:v2", "mode": "patch"}}
+        res = action.revert("open-webui-abc", prev,
+                            ActionContext(namespace="llm", dry_run=False))
+        assert res is not None and res.success is True
+        assert "deployment/open-webui" in res.command
+        assert "old:v2" in res.command
+
+
+class TestExecuteNoImage:
+    @patch("predictive_agent.actions.fix_image.resolve_deployment_name")
+    def test_execute_fails_when_target_has_no_image(self, mock_resolve):
+        """A malformed/allowlist entry without an image must fail gracefully,
+        not raise KeyError (operational config could be edited by hand)."""
+        mock_resolve.return_value = "open-webui"
+        action = FixImageAction(
+            targets=[{"namespace": "llm", "deployment": "open-webui", "mode": "patch"}],
+            enabled=True, require_log_signature=False,
+        )
+        res = action.execute("open-webui-x", ActionContext(namespace="llm", dry_run=False))
+        assert res is not None
+        assert res.success is False
+        assert "has no image" in res.message
+
+
+class TestCurrentImage:
+    @patch("predictive_agent.actions.fix_image.subprocess.run")
+    def test_current_image_all_containers(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="img-a:v1 img-b:v2", stderr="")
+        action = FixImageAction(targets=TARGETS, enabled=True)
+        img = action._current_image("llm", "multy")
+        assert img == "img-a:v1"
+        cmd = mock_run.call_args[0][0]
+        assert "containers[*].image" in cmd[-1]
+
+    @patch("predictive_agent.actions.fix_image.subprocess.run")
+    def test_current_image_target_container_filter(self, mock_run):
+        """When the fix targets a specific container, its image — not
+        container[0] — is the prev_image for revert (multi-container bug)."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="img-b:v2", stderr="")
+        action = FixImageAction(targets=TARGETS, enabled=True)
+        img = action._current_image("llm", "multy", container="web")
+        assert img == "img-b:v2"
+        cmd = mock_run.call_args[0][0]
+        assert "containers[?(@.name=='web')].image" in cmd[-1]
+
+    @patch("predictive_agent.actions.fix_image.subprocess.run")
+    def test_patch_apply_records_container_scoped_prev_image(self, mock_run):
+        """_patch_apply captures prev_image from the TARGET container, and the
+        recorded desired_state carries that container for revert."""
+        def _fake_run(cmd, **kw):
+            if "jsonpath" in cmd[-1] and "containers[?" in cmd[-1]:
+                out = "img-web:old"
+            else:
+                out = "deployment.apps/open-webui image updated"
+            return MagicMock(returncode=0, stdout=out, stderr="")
+        mock_run.side_effect = _fake_run
+        action = FixImageAction(targets=TARGETS, enabled=True)
+        fix = {
+            "namespace": "llm", "deployment": "multy", "container": "web",
+            "image": "img-web:new", "mode": "patch",
+        }
+        res = action._patch_apply("llm", "multy", fix,
+                                  ActionContext(namespace="llm", dry_run=False))
+        assert res.success is True
+        assert res.desired_state["prev_image"] == "img-web:old"
+        assert res.desired_state["container"] == "web"

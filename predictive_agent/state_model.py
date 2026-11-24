@@ -126,6 +126,7 @@ class PodTracker:
         self.memory_mib = 0
         self.memory_limit_mib = 0
         self.cpu_m = 0
+        self.cpu_limit_m = 1000
         self.restart_count = 0
         self.log_errors = 0
         self.node_pressure = False
@@ -140,13 +141,19 @@ class PodTracker:
         self.cpu_anomaly_score = 0.0
         self._created_at = None  # set on first update
 
-    def update(self, memory_mib, memory_limit_mib, cpu_m, restart_count, log_errors, node_pressure, node_disk_pressure=False):
-        """Update pod metrics and Kalman filters."""
+    def update(self, memory_mib, memory_limit_mib, cpu_m, restart_count, log_errors, node_pressure, node_disk_pressure=False, cpu_limit_m=1000):
+        """Update pod metrics and Kalman filters.
+
+        cpu_limit_m: summed container CPU limit in millicores (default 1000 =
+            a single core) used to normalize cpu_pct; mirrors how memory_pct
+            is normalized against memory_limit_mib.
+        """
         if self._created_at is None:
             self._created_at = datetime.now(timezone.utc)
         self.memory_mib = memory_mib
         self.memory_limit_mib = memory_limit_mib
         self.cpu_m = cpu_m
+        self.cpu_limit_m = cpu_limit_m if cpu_limit_m and cpu_limit_m > 0 else 1000
         self.restart_count = restart_count
         self.log_errors = log_errors
         self.node_pressure = node_pressure
@@ -166,8 +173,11 @@ class PodTracker:
         else:
             self.memory_pct = 0.0
 
-        # Estimate CPU percentage (assume 1000m = 100%)
-        self.cpu_pct = (cpu_m / 1000) * 100
+        # Estimate CPU percentage — normalized against the pod's summed CPU
+        # limit (default 1000m = one core when unknown) so multi-core pods are
+        # scored against their real capacity, not a single-core yardstick.
+        lim_m = self.cpu_limit_m if self.cpu_limit_m and self.cpu_limit_m > 0 else 1000
+        self.cpu_pct = (cpu_m / lim_m) * 100
 
         # Classify state
         # Calculate restart rate per hour from pod age
@@ -259,7 +269,7 @@ class StateModel:
 
     def update_pod(self, namespace, name, memory_mib, memory_limit_mib, cpu_m,
                    restart_count, log_errors, node_pressure, node_disk_pressure=False,
-                   node_name="", created_at=None):
+                   node_name="", created_at=None, cpu_limit_m=1000):
         """Update pod metrics and return the tracker.
 
         Records Markov chain state transitions when the pod's state changes.
@@ -286,6 +296,7 @@ class StateModel:
             log_errors=log_errors,
             node_pressure=node_pressure,
             node_disk_pressure=node_disk_pressure,
+            cpu_limit_m=cpu_limit_m,
         )
         # Record Markov transition when state changes
         if tracker.state != prev_state:
@@ -306,6 +317,7 @@ class StateModel:
                 "memory_mib": pod.memory_mib,
                 "memory_limit_mib": pod.memory_limit_mib,
                 "cpu_m": pod.cpu_m,
+                "cpu_limit_m": pod.cpu_limit_m,
                 "restart_count": pod.restart_count,
                 "log_errors": pod.log_errors,
                 "node_pressure": pod.node_pressure,
@@ -331,6 +343,7 @@ class StateModel:
                 tracker.memory_mib = pod_data["memory_mib"]
                 tracker.memory_limit_mib = pod_data["memory_limit_mib"]
                 tracker.cpu_m = pod_data["cpu_m"]
+                tracker.cpu_limit_m = pod_data.get("cpu_limit_m", 1000)
                 tracker.restart_count = pod_data["restart_count"]
                 tracker.log_errors = pod_data["log_errors"]
                 tracker.node_pressure = pod_data["node_pressure"]

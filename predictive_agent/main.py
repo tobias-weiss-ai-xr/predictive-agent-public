@@ -17,8 +17,8 @@ endpoints.
 """
 
 import logging
-import sys
 import signal
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -105,6 +105,7 @@ _get_pod_restart_count = pod_collection.get_pod_restart_count
 _get_pod_namespace = pod_collection.get_pod_namespace
 _get_pod_name = pod_collection.get_pod_name
 _get_pod_memory_limit = pod_collection.get_pod_memory_limit
+_get_pod_cpu_limit = pod_collection.get_pod_cpu_limit
 _should_skip_namespace = pod_collection.should_skip_namespace
 _is_pod_excluded = pod_collection.is_pod_excluded
 _is_pod_ghost = pod_collection.is_pod_ghost
@@ -179,6 +180,7 @@ def _build_context() -> "phases.ReconcileContext":
         get_pod_namespace=_get_pod_namespace,
         get_pod_name=_get_pod_name,
         get_pod_memory_limit=_get_pod_memory_limit,
+        get_pod_cpu_limit=_get_pod_cpu_limit,
         get_pod_restart_count=_get_pod_restart_count,
         should_skip_namespace=_should_skip_namespace,
         is_pod_excluded=_is_pod_excluded,

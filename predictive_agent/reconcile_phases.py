@@ -117,6 +117,10 @@ class ReconcileContext:
     # Optional AlertWatch feed (Alertmanager/Prometheus correlation). None when
     # disabled — the per-pod loop and ceph drain guard on it.
     alert_feed: Any = None
+    # CPU limit extractor (summed container limits). Optional with a single-core
+    # fallback so pre-existing ReconcileContext constructors keep working; the
+    # real main()-wired callable normalizes cpu_pct against the pod's capacity.
+    get_pod_cpu_limit: Callable[..., int] = lambda pod, container_name="": 1000
 
 
 @dataclass
@@ -462,6 +466,9 @@ def evaluate_pods(
 
             # Get memory limit from Docker inspect info
             memory_limit_mib = ctx.get_container_memory_limit(pod.get("_docker_info", {}))
+            # CPU limit: docker pods carry no k8s-style resource limits; the
+            # default single-core fallback applies via get_pod_cpu_limit.
+            cpu_limit_m = ctx.get_pod_cpu_limit(pod)
 
             # Docker has no node pressure (single host)
             mem_pressure = False
@@ -516,6 +523,9 @@ def evaluate_pods(
 
             # Get memory limit from pod spec
             memory_limit_mib = ctx.get_pod_memory_limit(pod)
+
+            # Get CPU limit from pod spec (summed across containers)
+            cpu_limit_m = ctx.get_pod_cpu_limit(pod)
 
             # Get node pressure
             node_name = pod.get("spec", {}).get("nodeName", "")
@@ -584,6 +594,7 @@ def evaluate_pods(
                 node_disk_pressure=disk_pressure,
                 node_name=node_name if runtime != "docker" else "docker-host",
                 created_at=pod.get("metadata", {}).get("creationTimestamp", ""),
+                cpu_limit_m=cpu_limit_m,
             )
         pods_tracked += 1
 

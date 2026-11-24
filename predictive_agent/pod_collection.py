@@ -187,6 +187,33 @@ def get_pod_memory_limit(pod: dict, container_name: str = "") -> int:
     return total if (found and not container_name) else 0
 
 
+def get_pod_cpu_limit(pod: dict, container_name: str = "") -> int:
+    """Extract CPU limit in millicores from pod spec.
+
+    Without ``container_name`` the sum over all containers is returned, so the
+    limit is comparable to ``kubectl top pods`` which reports whole-pod usage.
+    cpu_pct must be normalized against this summed limit (not a hardcoded
+    1000m = 100%) so multi-core pods (e.g. ollama-next-0, 16-core limit) are
+    not mis-scored as >1000% CPU saturated when they are merely busy.
+    """
+    from predictive_agent.collector import parse_cpu
+
+    spec = pod.get("spec", {})
+    total = 0
+    found = False
+    for container in spec.get("containers", []):
+        if container_name and container.get("name", "") != container_name:
+            continue
+        limits = container.get("resources", {}).get("limits", {})
+        if "cpu" in limits:
+            total += parse_cpu(limits["cpu"])
+            found = True
+            if container_name:
+                # Named lookup: return that container's limit directly.
+                return parse_cpu(limits["cpu"])
+    return total if (found and not container_name) else 0
+
+
 def should_skip_namespace(ns: str) -> bool:
     """Check if a namespace should be skipped."""
     if ns in config.SKIP_NAMESPACES:

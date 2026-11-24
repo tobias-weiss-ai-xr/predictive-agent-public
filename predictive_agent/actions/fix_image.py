@@ -43,32 +43,6 @@ logger = logging.getLogger(__name__)
 
 RISK_THRESHOLD = 0.7
 
-DEFAULT_LOG_PATTERNS = [
-    "alembic",
-    "can't locate revision",
-    "migration failed",
-    "running upgrade",
-    "django.db.migrations",
-    "django_migrations",
-    "prisma migrate",
-    "knex",
-    "sequelize",
-    "digest mismatch",
-    "manifest unknown",
-    "no matching manifest",
-    "image pull",
-]
-
-
-def _load_json_env(name: str, default):
-    raw = os.environ.get(name, "")
-    if not raw:
-        return default
-    try:
-        return json.loads(raw)
-    except (ValueError, TypeError):
-        return default
-
 
 def find_target(targets, namespace: str, deployment: str):
     """Return the operator-declared fix target for (namespace, deployment)."""
@@ -85,10 +59,7 @@ def log_has_drift_signature(log_text: str, patterns) -> bool:
     if not log_text:
         return False
     low = log_text.lower()
-    for pat in patterns or []:
-        if pat.lower() in low:
-            return True
-    return False
+    return any(pat.lower() in low for pat in patterns or [])
 
 
 def _run(cmd, timeout: float):
@@ -235,11 +206,21 @@ class FixImageAction(RemediationAction):
                 return True
         return False
 
-    def _current_image(self, namespace: str, deployment: str):
+    def _current_image(self, namespace: str, deployment: str, container: str | None = None):
+        """Return the current image of ``container`` (or the first container).
+
+        Querying the target container explicitly matters for multi-container
+        deployments: ``prev_image`` must be the image of the *fixed* container,
+        not container[0], so that revert restores the right image.
+        """
+        query = "containers[*].image"
+        if container:
+            # kubectl jsonpath filter: containers[?(@.name=='<container>')].image
+            query = f"containers[?(@.name=='{container}')].image"
         rc, out, _ = _run(
             [
                 "kubectl", "get", "deployment", "-n", namespace, deployment,
-                "-o", "jsonpath={.spec.template.spec.containers[*].image}",
+                "-o", f"jsonpath={{.{query}}}",
             ],
             self.kubectl_timeout,
         )
@@ -308,7 +289,13 @@ class FixImageAction(RemediationAction):
             )
 
         mode = fix.get("mode", "patch")
-        new_image = fix["image"]
+        new_image = fix.get("image") or ""
+        if not new_image:
+            return RemediationResult(
+                action=self.name, target=deployment, success=False,
+                dry_run=context.dry_run,
+                message=f"fix_image: allowlisted target {ns}/{deployment} has no image",
+            )
         if mode == "gitops":
             return self._gitops_apply(ns, deployment, fix, context)
         return self._patch_apply(ns, deployment, fix, context)
@@ -316,7 +303,7 @@ class FixImageAction(RemediationAction):
     def _patch_apply(self, ns, deployment, fix, context) -> RemediationResult:
         new_image = fix["image"]
         container = fix.get("container")
-        old_image = self._current_image(ns, deployment) or ""
+        old_image = self._current_image(ns, deployment, container) or ""
         spec = (f"{container}=" if container else "") + new_image
         cmd = ["kubectl", "set", "image", f"deployment/{deployment}", spec, "-n", ns]
         if context.dry_run:
@@ -357,7 +344,7 @@ class FixImageAction(RemediationAction):
         manifest_path = os.path.join(repo_dir, manifest_rel)
         new_image = fix["image"]
         try:
-            with open(manifest_path, "r", encoding="utf-8") as fh:
+            with open(manifest_path, encoding="utf-8") as fh:
                 old_text = fh.read()
             new_text, old_image = replace_image_line(old_text, new_image)
         except FileNotFoundError:
@@ -419,7 +406,13 @@ class FixImageAction(RemediationAction):
         )
 
     def revert(self, target: str, prev_state, context) -> RemediationResult:
-        """Restore the previously-recorded image on failed verification."""
+        """Restore the previously-recorded image on failed verification.
+
+        ``target`` is the pod name (the verification loop passes the pod), so
+        the owning deployment is re-resolved here — exactly like ``execute``.
+        ``prev_image`` is restored per-container (the target container recorded
+        at execution time).
+        """
         ns = getattr(context, "namespace", "") or ""
         desired = (prev_state or {}).get("desired_state") or {}
         prev_image = desired.get("prev_image") or ""
@@ -433,8 +426,11 @@ class FixImageAction(RemediationAction):
             )
         if mode == "gitops":
             return self._gitops_revert(target, ns, context)
+        # target is the pod name from the verification loop; resolve the
+        # owning deployment (accept a direct deployment name as fallback).
+        deployment = resolve_deployment_name(ns, target, self.kubectl_timeout) or target
         spec = (f"{container}=" if container else "") + prev_image
-        cmd = ["kubectl", "set", "image", f"deployment/{target}", spec, "-n", ns]
+        cmd = ["kubectl", "set", "image", f"deployment/{deployment}", spec, "-n", ns]
         if context.dry_run:
             cmd.append("--dry-run=client")
         rc, out, err = _run(cmd, self.kubectl_timeout)

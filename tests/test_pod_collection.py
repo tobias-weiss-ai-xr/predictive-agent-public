@@ -167,6 +167,32 @@ def test_get_pod_memory_limit_named_returns_only_that_container():
     assert pod_collection.get_pod_memory_limit(pod, "c2") == 300
 
 
+# ── get_pod_cpu_limit ───────────────────────────────────────────────────────
+
+
+def test_get_pod_cpu_limit_sums_all_containers():
+    """Whole-pod CPU limit must sum over containers so multi-core pods are
+    sized against their real capacity (e.g. ollama-next-0 with a 16-core
+    limit), not a hardcoded single core."""
+    pod = {"spec": {"containers": [
+        {"name": "c1", "resources": {"limits": {"cpu": "4"}}},
+        {"name": "c2", "resources": {"limits": {"cpu": "4000m"}}}]}}
+    assert pod_collection.get_pod_cpu_limit(pod) == 8000
+
+
+def test_get_pod_cpu_limit_zero_when_absent():
+    assert pod_collection.get_pod_cpu_limit({"spec": {"containers": []}}) == 0
+    assert pod_collection.get_pod_cpu_limit({}) == 0
+
+
+def test_get_pod_cpu_limit_named_returns_only_that_container():
+    pod = {"spec": {"containers": [
+        {"name": "c1", "resources": {"limits": {"cpu": "2"}}},
+        {"name": "c2", "resources": {"limits": {"cpu": "6000m"}}}]}}
+    assert pod_collection.get_pod_cpu_limit(pod, "c1") == 2000
+    assert pod_collection.get_pod_cpu_limit(pod, "c2") == 6000
+
+
 # ── should_skip_namespace ──────────────────────────────────────────────────
 
 

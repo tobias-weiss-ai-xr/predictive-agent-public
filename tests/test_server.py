@@ -117,8 +117,8 @@ def test_alerts_and_ceph_late_init(test_server):
 
             def read(self):
                 return (
-                    '{"data":{"result":[{"metric":{},"value":[1.0,"1"]}]}}'
-                ).encode()
+                    b'{"data":{"result":[{"metric":{},"value":[1.0,"1"]}]}}'
+                )
 
             def __enter__(self):
                 return self
