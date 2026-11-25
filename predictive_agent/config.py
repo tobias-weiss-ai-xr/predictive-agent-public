@@ -142,6 +142,20 @@ REMEDIATION_COOLDOWN_S = os.environ.get("REMEDIATION_COOLDOWN_S", "300")
 # double-restart, or double-tune. Default 300s.
 REMEDIATION_DEDUP_WINDOW = int(os.environ.get("REMEDIATION_DEDUP_WINDOW", "300"))
 REMEDIATION_RISK_THRESHOLD = float(os.environ.get("REMEDIATION_RISK_THRESHOLD", "0.7"))
+
+# ─── Risk alert lifecycle (auto-resolve damping) ──────────────────────────
+# The auto-resolve lifecycle closes a firing "plan" alert when a pod's score
+# drops. Pods hovering at the threshold flap fire/resolve every reconcile
+# cycle, flooding the Matrix room. Resolve is damped by:
+#   RESOLVE_HYSTERESIS: require score < threshold - hysteresis (dead band).
+#   RESOLVE_MIN_FIRING_S: require the incident to have been firing this long
+#                        (ignore single-cycle blips).
+#   RESOLVE_COOLDOWN_S: after a resolve, suppress re-firing notifications for
+#                       this window (a genuine re-escalation after cooldown
+#                       still alerts).
+RESOLVE_HYSTERESIS = float(os.environ.get("RESOLVE_HYSTERESIS", "0.05"))
+RESOLVE_MIN_FIRING_S = int(os.environ.get("RESOLVE_MIN_FIRING_S", "90"))
+RESOLVE_COOLDOWN_S = int(os.environ.get("RESOLVE_COOLDOWN_S", "300"))
 REMEDIATION_PROTECTED_NS = os.environ.get(
     "REMEDIATION_PROTECTED_NS", "kube-system,predictive-agent"
 )

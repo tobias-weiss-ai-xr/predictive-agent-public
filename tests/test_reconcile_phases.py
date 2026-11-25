@@ -98,6 +98,8 @@ def _build_ctx(state_model=None, predictor=None, remediation_manager=None,
         llm_analysis_cache={},
         llm_in_flight=set(),
         risk_firing=set(),
+        risk_fired_at={},
+        last_resolve_at={},
         last_plan_notify={},
         last_autonomy_notify={},
         **merged,
@@ -1423,6 +1425,16 @@ def _resolved_calls(notifier):
             if c.kwargs.get("status") == "resolved"]
 
 
+class _Clock:
+    """Controllable epoch clock for the lifecycle damping tests."""
+    def __init__(self, start=1000.0):
+        self.now = start
+    def advance(self, seconds):
+        self.now += seconds
+    def __call__(self):
+        return self.now
+
+
 def test_evaluate_pods_tracks_fired_risk_alert():
     predictor = Predictor(risk_threshold=0.0)
     ctx = _risk_cheap_ctx(predictor)
@@ -1431,7 +1443,9 @@ def test_evaluate_pods_tracks_fired_risk_alert():
     assert "default/p1" in ctx.risk_firing
 
 
-def test_evaluate_pods_resolves_alert_on_recovery():
+def test_evaluate_pods_resolves_alert_on_recovery(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
     predictor = Predictor(risk_threshold=0.0)
     ctx = _risk_cheap_ctx(predictor)
     phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
@@ -1439,6 +1453,7 @@ def test_evaluate_pods_resolves_alert_on_recovery():
     ctx.notifier.reset_mock()
     # Healthy risk (~0.15) drops below the raised threshold: pod recovered.
     ctx.predictor.risk_threshold = 0.9
+    clock.advance(config.RESOLVE_MIN_FIRING_S + 10)
     phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
     resolved = _resolved_calls(ctx.notifier)
     assert len(resolved) == 1
@@ -1447,7 +1462,9 @@ def test_evaluate_pods_resolves_alert_on_recovery():
     assert "default/p1" not in ctx.risk_firing
 
 
-def test_evaluate_pods_resolves_alert_when_pod_disappears():
+def test_evaluate_pods_resolves_alert_when_pod_disappears(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
     predictor = Predictor(risk_threshold=0.0)
     ctx = _risk_cheap_ctx(predictor)
     phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
@@ -1464,7 +1481,9 @@ def test_evaluate_pods_resolves_alert_when_pod_disappears():
     assert "default/p1" not in ctx.risk_firing
 
 
-def test_evaluate_pods_no_resolve_while_still_at_risk():
+def test_evaluate_pods_no_resolve_while_still_at_risk(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
     predictor = Predictor(risk_threshold=0.0)
     ctx = _risk_cheap_ctx(predictor)
     phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
@@ -1482,3 +1501,99 @@ def test_evaluate_pods_no_resolve_without_prior_firing():
     phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
     assert _resolved_calls(ctx.notifier) == []
     assert ctx.risk_firing == set()
+
+
+# ── Resolve damping (flood control for threshold-hovering pods) ─────────────
+
+
+class _HoverPredictor:
+    """Predictor stub returning a fixed risk score on the threshold boundary."""
+    def __init__(self, risk_score, threshold):
+        self.risk_score = risk_score
+        self.risk_threshold = threshold
+
+    def predict(self, **kwargs):
+        from predictive_agent.predictor import PredictionResult
+        return PredictionResult(
+            pod_key=kwargs.get("pod_key", "default/p1"),
+            risk_score=self.risk_score,
+            ttf_minutes=999,
+            confidence=0.5,
+            markov_state="HEALTHY",
+            memory_trend=0.0,
+            cpu_trend=0.0,
+            memory_pct=30.0,
+            cpu_pct=20.0,
+        )
+
+
+def test_hysteresis_prevents_resolve_on_boundary_hover(monkeypatch):
+    """A pod just below the threshold (within the dead band) must NOT resolve:
+    that is the live flapping that flooded the Matrix room."""
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
+    ctx = _risk_cheap_ctx(_HoverPredictor(risk_score=0.29, threshold=0.30))
+    ctx.risk_firing.add("default/p1")
+    ctx.risk_fired_at["default/p1"] = clock.now
+    clock.advance(config.RESOLVE_MIN_FIRING_S + 10)
+    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _resolved_calls(ctx.notifier) == [], "0.29 hover must not resolve at 0.30"
+    assert "default/p1" in ctx.risk_firing
+
+
+def test_no_resolve_for_young_incident(monkeypatch):
+    """A single-cycle blip fires and dips immediately; no resolve yet."""
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
+    predictor = Predictor(risk_threshold=0.0)
+    ctx = _risk_cheap_ctx(predictor)
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert "default/p1" in ctx.risk_firing
+    ctx.notifier.reset_mock()
+    ctx.predictor.risk_threshold = 0.9
+    # Only 10s later — incident younger than RESOLVE_MIN_FIRING_S.
+    clock.advance(10)
+    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _resolved_calls(ctx.notifier) == [], "young incident must not resolve"
+    assert "default/p1" in ctx.risk_firing
+
+
+def test_re_fire_within_cooldown_is_suppressed(monkeypatch):
+    """After a resolve, a re-crossing within cooldown is jitter, not a new alert."""
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
+    predictor = Predictor(risk_threshold=0.0)
+    ctx = _risk_cheap_ctx(predictor)
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    ctx.notifier.reset_mock()
+    ctx.predictor.risk_threshold = 0.9
+    clock.advance(config.RESOLVE_MIN_FIRING_S + 10)
+    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert len(_resolved_calls(ctx.notifier)) == 1
+    # Re-fire immediately: threshold back to 0.0, within cooldown.
+    ctx.notifier.reset_mock()
+    ctx.predictor.risk_threshold = 0.0
+    clock.advance(5)
+    phases.evaluate_pods(ctx, 3, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _plan_calls(ctx.notifier) == [], "re-fire in cooldown must be silent"
+    assert "default/p1" in ctx.risk_firing
+    assert "default/p1" in ctx.risk_fired_at
+
+
+def test_re_fire_after_cooldown_alerts_again(monkeypatch):
+    """A genuine re-escalation after the cooldown window still alerts."""
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
+    predictor = Predictor(risk_threshold=0.0)
+    ctx = _risk_cheap_ctx(predictor)
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    ctx.notifier.reset_mock()
+    ctx.predictor.risk_threshold = 0.9
+    clock.advance(config.RESOLVE_MIN_FIRING_S + 10)
+    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    ctx.notifier.reset_mock()
+    ctx.predictor.risk_threshold = 0.0
+    clock.advance(config.RESOLVE_COOLDOWN_S + 10)
+    phases.evaluate_pods(ctx, 3, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _plan_calls(ctx.notifier), "re-fire after cooldown should alert"
+    assert "default/p1" in ctx.risk_firing

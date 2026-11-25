@@ -88,6 +88,11 @@ class ReconcileContext:
     # "resolved" notification) when it drops below or disappears, so the
     # matrix alertbridge sees the incident close instead of a new firing.
     risk_firing: Set[str]
+    # Damping state for the fire/resolve lifecycle:
+    #   risk_fired_at: pod_key -> epoch when the incident started firing.
+    #   last_resolve_at: pod_key -> epoch of the last resolve (cooldown base).
+    risk_fired_at: Dict[str, float]
+    last_resolve_at: Dict[str, float]
     last_plan_notify: Dict[str, Tuple[str, float]]
     last_autonomy_notify: Dict[str, Tuple[str, float]]
 
@@ -359,6 +364,8 @@ def prepare_state_model(
             # Auto-resolve: close any firing risk alert for the removed pod.
             if pod_key in ctx.risk_firing:
                 ctx.risk_firing.discard(pod_key)
+                ctx.risk_fired_at.pop(pod_key, None)
+                ctx.last_resolve_at[pod_key] = time.time()
                 if ctx.notifier is not None:
                     try:
                         ctx.notifier.notify(
@@ -741,9 +748,19 @@ def evaluate_pods(
                 except Exception:  # noqa: BLE001 - feed must never break the loop
                     pass
 
+            now_ts = time.time()
             if result.risk_score >= ctx.predictor.risk_threshold:
                 at_risk_count += 1
                 ctx.risk_firing.add(pod_key)
+                ctx.risk_fired_at.setdefault(pod_key, now_ts)
+                # Cooldown: a pod that just resolved and re-crosses the
+                # threshold within RESOLVE_COOLDOWN_S is threshold jitter, not a
+                # new incident — suppress the firing notification (still counted
+                # as at-risk and executed if remediation is permitted).
+                in_cooldown = (
+                    pod_key in ctx.last_resolve_at
+                    and now_ts - ctx.last_resolve_at[pod_key] < config.RESOLVE_COOLDOWN_S
+                )
                 # Surface the planned intervention sequence for operator visibility.
                 # This only *plans* (no execution); the REM-8 block below executes
                 # via plan_and_execute using the same model and pod state.
@@ -758,7 +775,7 @@ def evaluate_pods(
                 if ctx.remediation_manager is not None and ctx.notifier is not None:
                     try:
                         plan = cycle_plans.get(pod_key)
-                        if plan and any(s["action"] != "none" for s in plan["steps"]):
+                        if plan and not in_cooldown and any(s["action"] != "none" for s in plan["steps"]):
                             actions = [s["action"] for s in plan["steps"] if s["action"] != "none"]
                             sig = ",".join(actions)
                             last = ctx.last_plan_notify.get(pod_key)
@@ -990,8 +1007,22 @@ def evaluate_pods(
             # "resolved" Alertmanager notification instead of leaving it
             # permanently firing. Only pods that actually fired are resolved.
             elif pod_key in ctx.risk_firing:
-                ctx.risk_firing.discard(pod_key)
-                if ctx.notifier is not None:
+                # Dead-band: require the score to fall clearly below the
+                # threshold, not merely equal to it, so pods hovering at the
+                # boundary do not flap fire/resolve each cycle.
+                resolved_score = result.risk_score < (
+                    ctx.predictor.risk_threshold - config.RESOLVE_HYSTERESIS
+                )
+                fired_at = ctx.risk_fired_at.get(pod_key, now_ts)
+                long_enough = (now_ts - fired_at) >= config.RESOLVE_MIN_FIRING_S
+                if not (resolved_score and long_enough):
+                    # Still on the boundary / incident too young: keep firing.
+                    pass
+                else:
+                    ctx.risk_firing.discard(pod_key)
+                    ctx.risk_fired_at.pop(pod_key, None)
+                    ctx.last_resolve_at[pod_key] = now_ts
+                if ctx.notifier is not None and resolved_score and long_enough:
                     try:
                         ctx.notifier.notify(
                             alert_type="plan",
