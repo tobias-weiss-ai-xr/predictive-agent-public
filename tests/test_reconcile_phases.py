@@ -1367,3 +1367,32 @@ def test_evaluate_pods_derives_ghost_set_once_for_many_pods(monkeypatch):
     phases.evaluate_pods(ctx, 1, "kubernetes", pods, {}, {}, set())
 
     assert calls["n"] == 1, f"dead-RS set recomputed {calls['n']}x for 50 pods"
+
+
+def test_qtable_persist_failure_reports_self_health_and_continues():
+    """Mirror of the decision-model failure report: a Q-table save that raises
+    must (1) not abort the persist phase, (2) report to self-health so the
+    operator learns the RL policy is silently stale."""
+    phases.reset_self_health()
+    try:
+        store = MagicMock()
+        # save_decision_model succeeds so only the Q-table path is exercised
+        store.save_decision_model.return_value = None
+        store.save_q_table.side_effect = OSError("[Errno 13] Permission denied")
+        rem = MagicMock()
+        rem.decision_model.to_action_dict.return_value = {"a": 1}
+        rem.rl_policy.to_dict.return_value = {"q": {}}
+        notifier = MagicMock()
+        ctx = _build_ctx(state_store=store, state_model=StateModel(),
+                        remediation_manager=rem, notifier=notifier)
+        saved = phases.persist_state(ctx, 0)
+        assert saved == 1  # markov save counted, phase did not abort
+        assert notifier.email.send.call_count == 1
+        subject, body = notifier.email.send.call_args[0]
+        assert "[self-health:persistence]" in subject
+        assert "Q-table" in body
+        # cooldown suppresses the repeated failure
+        phases.persist_state(ctx, 0)
+        assert notifier.email.send.call_count == 1
+    finally:
+        phases.reset_self_health()

@@ -1184,6 +1184,11 @@ def persist_state(ctx: ReconcileContext, state_saves: int) -> int:
                     ctx.state_store.save_q_table(ctx.remediation_manager.rl_policy.to_dict())
             except Exception as e:  # noqa: BLE001
                 logger.warning("Failed to persist Q-table: %s", e)
+                _get_self_health(ctx)[0].report(
+                    "persistence",
+                    "Q-table not persisted",
+                    f"save_q_table failed: {e}",
+                )
         if ctx.predictor is not None:
             predictions_data = [
                 {
