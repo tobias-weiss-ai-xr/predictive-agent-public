@@ -266,3 +266,67 @@ class TestCpuLimitKnown:
         data = model.to_dict()
         restored = StateModel.from_dict(data)
         assert restored.pods["ns/p"].cpu_limit_known is False
+
+
+# ── Seasonal (Holt-Winters) trend companions ─────────────────────────────────
+
+
+def _seasonal_warmup(tracker, loop=6, period=24, step=60.0, amp=400.0, base=2000.0, monkeypatch=None):
+    """Feed `tracker` `loop` full periods of a clean daily sine so the seasonal
+    model fits with full seasonal-index coverage. The wall clock (time.time)
+    is advanced `step` seconds per sample so the seasonal index advances one
+    slot per observation (mirrors the 60s reconcile cadence)."""
+    import math
+
+    import predictive_agent.state_model as sm
+    real_time = sm.time.time
+    clock = [1735689600.0]  # fixed epoch
+    def fake_time():
+        return clock[0]
+    monkeypatch.setattr(sm.time, "time", fake_time)
+    n = loop * period
+    for i in range(n):
+        v = base + amp * math.sin(2 * math.pi * (i % period) / period)
+        tracker.update(v, 4096, int(v % 500), 0, 0, False, cpu_limit_m=1000)
+        clock[0] += step
+    monkeypatch.setattr(sm.time, "time", real_time)
+    return tracker
+
+
+class TestSeasonalTrend:
+    def test_off_mode_does_not_keep_seasonal_state(self):
+        t = PodTracker("ns", "p", seasonal_mode="off", seasonal_period=24)
+        assert t.seasonal_mode == "off"
+        t.update(100, 4096, 50, 0, 0, False, cpu_limit_m=1000)
+        assert t.seasonal_mem_conf == 0.0
+        assert t.seasonal_mem_vel == 0.0
+
+    def test_shadow_mode_exposes_seasonal_conf_signal(self, monkeypatch):
+        t = PodTracker("ns", "p", seasonal_mode="shadow", seasonal_period=24)
+        _seasonal_warmup(t, monkeypatch=monkeypatch)
+        assert t.seasonal_mem_conf > 0.5, f"conf={t.seasonal_mem_conf}"
+        assert t.seasonal_cpu_conf > 0.5
+        # shadow still returns the Kalman velocity unchanged
+        assert t.memory_trend == t.kalman_memory.velocity
+
+    def test_on_mode_uses_seasonal_velocity_when_confident(self, monkeypatch):
+        t = PodTracker("ns", "p", seasonal_mode="on", seasonal_period=24)
+        _seasonal_warmup(t, loop=8, monkeypatch=monkeypatch)
+        assert t.seasonal_mem_conf > 0.5
+        # seasonal expected velocity must be bounded and sane (per-sample delta
+        # of a 400-amplitude / 24-period sine ≈ (2*pi*400)/24 ≈ 105)
+        assert abs(t.seasonal_mem_vel) < 400
+        # and it must differ from the flat Kalman velocity on a clean signal
+        assert t.memory_trend != pytest.approx(t.kalman_memory.velocity, abs=1e-6)
+
+    def test_on_mode_falls_back_to_kalman_without_fit(self):
+        t = PodTracker("ns", "p", seasonal_mode="on", seasonal_period=24)
+        t.update(100, 4096, 50, 0, 0, False, cpu_limit_m=1000)
+        assert t.seasonal_mem_conf == 0.0
+        assert t.memory_trend == t.kalman_memory.velocity
+
+    def test_seasonal_fields_in_tracker_dict(self):
+        t = PodTracker("ns", "p", seasonal_mode="shadow", seasonal_period=24)
+        d = t.__dict__
+        assert "seasonal_mode" in d
+        assert "seasonal_mem_conf" in d

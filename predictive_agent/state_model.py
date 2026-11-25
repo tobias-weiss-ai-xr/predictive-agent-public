@@ -2,10 +2,12 @@
 
 import os
 import threading
+import time
 from datetime import datetime, timezone
 
 from predictive_agent.kalman import KalmanTrend
 from predictive_agent.markov import MarkovChain
+from predictive_agent.seasonal import HoltWinters
 
 # Per-metric Kalman parameters (configurable via environment)
 # Memory changes gradually — low process noise, moderate measurement noise
@@ -14,6 +16,22 @@ _KALMAN_MEM_MEASUREMENT_NOISE = float(os.environ.get("KALMAN_MEMORY_MEASUREMENT_
 # CPU is noisier — higher process noise to track spikes, higher measurement noise
 _KALMAN_CPU_PROCESS_NOISE = float(os.environ.get("KALMAN_CPU_PROCESS_NOISE", "5.0"))
 _KALMAN_CPU_MEASUREMENT_NOISE = float(os.environ.get("KALMAN_CPU_MEASUREMENT_NOISE", "200.0"))
+
+# Seasonal (Holt-Winters) trend alongside the linear Kalman velocity.
+# Modes:
+#   off    (default) — no seasonal state is kept; memory_trend/cpu_trend are
+#          exactly the Kalman velocities (unchanged behaviour).
+#   shadow — compute the seasonal signal + model-selection stats but keep
+#          returning Kalman trends; /state & /metrics expose the would-be
+#          seasonal values so the improvement can be validated before use.
+#   on     — memory_trend/cpu_trend return the seasonal expected velocity
+#          once the per-metric model is fitted and confident (threshold
+#          SEASONAL_CONF_TREND), falling back to Kalman otherwise.
+_SEASONAL_TREND_MODE = os.environ.get("SEASONAL_TREND_MODE", "off").lower()
+_SEASONAL_PERIOD = int(os.environ.get("SEASONAL_PERIOD_SAMPLES", "1440"))  # 24h @ 60s
+# Minimum seasonal confidence before shadow/on mode trusts the seasonal
+# expected velocity over the linear Kalman velocity.
+_SEASONAL_CONF_TREND = float(os.environ.get("SEASONAL_CONF_TREND", "0.3"))
 # Consecutive agreeing classifications required to commit a state change.
 # Damps boundary jitter (e.g. a pod hovering at the DEGRADED threshold
 # flapping every reconcile cycle). 1 = old instantaneous behavior.
@@ -115,7 +133,7 @@ def classify_state(memory_pct, cpu_pct, restart_rate, log_errors, node_pressure,
 class PodTracker:
     """Track state of a single pod using Kalman filters."""
 
-    def __init__(self, namespace, name, kalman_memory=None, kalman_cpu=None, node_name="", hysteresis=None):
+    def __init__(self, namespace, name, kalman_memory=None, kalman_cpu=None, node_name="", hysteresis=None, seasonal_mode=None, seasonal_period=None):
         self.namespace = namespace
         self.name = name
         self.pod_key = f"{namespace}/{name}"
@@ -133,6 +151,20 @@ class PodTracker:
             process_noise=_KALMAN_CPU_PROCESS_NOISE,
             measurement_noise=_KALMAN_CPU_MEASUREMENT_NOISE,
         )
+        # Seasonal (Holt-Winters) companions — only fed when the mode is not
+        # "off" (see _SEASONAL_TREND_MODE). Not persisted: they self-warm from
+        # observed samples across restart/shadow transitions and the state file
+        # stays backward-compatible.
+        _sper = _SEASONAL_PERIOD if seasonal_period is None else seasonal_period
+        self.seasonal_memory = HoltWinters(season_len=_sper)
+        self.seasonal_cpu = HoltWinters(season_len=_sper)
+        self.seasonal_mode = _SEASONAL_TREND_MODE if seasonal_mode is None else seasonal_mode
+        # Last fitted confidence + seasonal expected velocities, exposed for
+        # observability in shadow mode and used for selection in "on" mode.
+        self.seasonal_mem_conf = 0.0
+        self.seasonal_cpu_conf = 0.0
+        self.seasonal_mem_vel = 0.0
+        self.seasonal_cpu_vel = 0.0
         self.memory_pct = 0.0
         self.cpu_pct = 0.0
         self.memory_mib = 0
@@ -186,6 +218,16 @@ class PodTracker:
         self.kalman_memory.update(memory_mib)
         self.kalman_cpu.update(cpu_m)
 
+        # Seasonal companions follow the same observations (shadow/on modes).
+        if self.seasonal_mode != "off":
+            ts = time.time()
+            self.seasonal_memory.observe(ts, float(memory_mib))
+            self.seasonal_cpu.observe(ts, float(cpu_m))
+            self.seasonal_mem_conf = self.seasonal_memory.confidence
+            self.seasonal_cpu_conf = self.seasonal_cpu.confidence
+            self.seasonal_mem_vel = self.seasonal_memory.expected_velocity()
+            self.seasonal_cpu_vel = self.seasonal_cpu.expected_velocity()
+
         # Anomaly detection: 3-sigma innovation check
         self.memory_anomaly_score = self.kalman_memory.anomaly_score(memory_mib)
         self.cpu_anomaly_score = self.kalman_cpu.anomaly_score(cpu_m)
@@ -236,15 +278,33 @@ class PodTracker:
 
 
 
+    def _seasonal_velocity(self, conf, seasonal_vel, kalman_vel):
+        """Return the trend to expose for a metric given the mode.
+
+        - off: always the Kalman velocity (unchanged behaviour).
+        - shadow: seasonal computed but Kalman exposed (improvement visible in
+          `seasonal_mem_vel`/`seasonal_cpu_vel` for validation).
+        - on: seasonal velocity when the model is fitted and confident enough.
+        """
+        if self.seasonal_mode != "on":
+            return kalman_vel
+        if conf >= _SEASONAL_CONF_TREND:
+            return seasonal_vel
+        return kalman_vel
+
     @property
     def memory_trend(self):
         """Current memory trend in MiB/min."""
-        return self.kalman_memory.velocity
+        return self._seasonal_velocity(
+            self.seasonal_mem_conf, self.seasonal_mem_vel, self.kalman_memory.velocity
+        )
 
     @property
     def cpu_trend(self):
         """Current CPU trend in millicores/min."""
-        return self.kalman_cpu.velocity
+        return self._seasonal_velocity(
+            self.seasonal_cpu_conf, self.seasonal_cpu_vel, self.kalman_cpu.velocity
+        )
 
     def time_to_failure(self, threshold_pct=95):
         """Estimate time to reach memory threshold.
@@ -351,6 +411,13 @@ class StateModel:
                 "memory_anomaly_score": pod.memory_anomaly_score,
                 "cpu_anomaly_score": pod.cpu_anomaly_score,
                 "node_name": pod.node_name,
+                "seasonal": {
+                    "mode": pod.seasonal_mode,
+                    "mem_conf": pod.seasonal_mem_conf,
+                    "cpu_conf": pod.seasonal_cpu_conf,
+                    "mem_vel": pod.seasonal_mem_vel,
+                    "cpu_vel": pod.seasonal_cpu_vel,
+                } if pod.seasonal_mode != "off" else None,
                 "created_at": pod._created_at.isoformat() if pod._created_at else None,
             } for key, pod in self.pods.items()},
             "markov": self.markov.to_dict() if self.markov else None,

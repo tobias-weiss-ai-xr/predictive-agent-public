@@ -435,11 +435,25 @@ class RequestHandler(BaseHTTPRequestHandler):
             lines.append("# TYPE predictive_agent_markov_transition gauge")
             lines.append("# HELP predictive_agent_pod_anomaly_score Per-pod anomaly score (0=normal, >3=anomalous)")
             lines.append("# TYPE predictive_agent_pod_anomaly_score gauge")
+            lines.append("# HELP predictive_agent_seasonal_conf Per-pod seasonal model confidence (0-1, 0 when off/not fitted)")
+            lines.append("# TYPE predictive_agent_seasonal_conf gauge")
+            lines.append("# HELP predictive_agent_seasonal_vel Per-pod seasonal expected velocity (multi-dim by metric_dim)")
+            lines.append("# TYPE predictive_agent_seasonal_vel gauge")
             for pod_key, tracker in pods_snapshot.items():
                 cpu_trend = getattr(tracker, 'cpu_trend', 0.0) or 0.0
                 mem_trend = getattr(tracker, 'memory_trend', 0.0) or 0.0
                 restart_count = getattr(tracker, 'restart_count', 0)
                 state_num = self._STATE_MAP.get(getattr(tracker, 'state', 'HEALTHY'), 0)
+                seasonal_conf = 0.0
+                seasonal_mem_vel = 0.0
+                seasonal_cpu_vel = 0.0
+                if getattr(tracker, 'seasonal_mode', 'off') != 'off':
+                    seasonal_conf = max(
+                        getattr(tracker, 'seasonal_mem_conf', 0.0) or 0.0,
+                        getattr(tracker, 'seasonal_cpu_conf', 0.0) or 0.0,
+                    )
+                    seasonal_mem_vel = getattr(tracker, 'seasonal_mem_vel', 0.0) or 0.0
+                    seasonal_cpu_vel = getattr(tracker, 'seasonal_cpu_vel', 0.0) or 0.0
                 # Find matching prediction for confidence and markov state
                 confidence = 0.0
                 markov_p = 0.0
@@ -458,6 +472,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 lines.append(f"predictive_agent_kalman_confidence{{pod=\"{pod_key}\"}} {confidence}")
                 lines.append(f"predictive_agent_markov_transition{{pod=\"{pod_key}\"}} {markov_p}")
                 lines.append(f"predictive_agent_pod_anomaly_score{{pod=\"{pod_key}\"}} {anomaly_score}")
+                if getattr(tracker, 'seasonal_mode', 'off') != 'off':
+                    lines.append(f"predictive_agent_seasonal_conf{{pod=\"{pod_key}\"}} {seasonal_conf}")
+                    lines.append(f"predictive_agent_seasonal_vel{{pod=\"{pod_key}\",metric_dim=\"memory\"}} {seasonal_mem_vel}")
+                    lines.append(f"predictive_agent_seasonal_vel{{pod=\"{pod_key}\",metric_dim=\"cpu\"}} {seasonal_cpu_vel}")
         # Remediation metrics (REM-8)
         rem = _context.remediation_manager
         if rem is not None:
