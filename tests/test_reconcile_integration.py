@@ -93,6 +93,12 @@ class _FakeNotifier:
 def _build_pod(mode):
     """A pod JSON that classifies CRITICAL (high mem/cpu/restart) or not."""
     restart = 10 if mode == "critical" else 0
+    # A crash-looping pod under observation has a CPU limit; an unlimited one
+    # must not be scored against a synthetic core (no limit => the operator
+    # drops the CPU-saturation signal in classify_state/risk).
+    limits = {"memory": "1Gi"}
+    if mode == "critical":
+        limits["cpu"] = "1000m"
     return {
         "metadata": {
             "namespace": "ns",
@@ -102,7 +108,7 @@ def _build_pod(mode):
         },
         "spec": {
             "nodeName": "node1",
-            "containers": [{"name": "c", "resources": {"limits": {"memory": "1Gi"}}}],
+            "containers": [{"name": "c", "resources": {"limits": limits}}],
         },
         "status": {
             "phase": "Running",

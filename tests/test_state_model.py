@@ -216,3 +216,53 @@ def test_classify_state_fresh_restart_still_penalized():
         memory_pct=30.0, cpu_pct=20.0, restart_rate=0.05,
         log_errors=0, node_pressure=False, markov_state="DEGRADED",
     ) == "HEALTHY"
+
+
+class TestCpuLimitKnown:
+    """Regression (2026-11-25 audit): "no limit" must survive as a fact.
+
+    ``get_pod_cpu_limit`` returns 0 when no container declares a CPU limit.
+    The tracker substituted a synthetic 1000m default and dropped the fact that
+    no limit exists, so every downstream consumer (cpu_pct, classify_state,
+    risk.py) judged a legal burst against a one-core ceiling.
+    """
+
+    def test_zero_limit_marks_limit_unknown(self):
+        model = StateModel()
+        model.update_pod("ns", "p", 10, 100, 500, 0, 0, False, cpu_limit_m=0)
+        tracker = model.pods["ns/p"]
+        assert tracker.cpu_limit_known is False
+        # numeric default is kept so existing thresholds still have a scale
+        assert tracker.cpu_limit_m == 1000
+
+    def test_real_limit_is_known(self):
+        model = StateModel()
+        model.update_pod("ns", "p", 10, 100, 500, 0, 0, False, cpu_limit_m=4000)
+        tracker = model.pods["ns/p"]
+        assert tracker.cpu_limit_known is True
+        assert tracker.cpu_limit_m == 4000
+
+    def test_unknown_limit_does_not_penalise_classification(self):
+        """An unlimited pod bursting past one core must not score as saturated."""
+        model = StateModel()
+        # 1250m usage, no limit: legal burst on a big node.
+        model.update_pod("ns", "p", 10, 100, 1250, 0, 0, False, cpu_limit_m=0)
+        unlimited = model.pods["ns/p"].state
+        # Hysteresis: state only flips after two agreeing cycles.
+        for _ in range(5):
+            model.update_pod("ns", "p", 10, 100, 1250, 0, 0, False, cpu_limit_m=0)
+        unlimited = model.pods["ns/p"].state
+        # Same usage against a real 1000m limit IS saturation.
+        model2 = StateModel()
+        for _ in range(5):
+            model2.update_pod("ns", "p", 10, 100, 1250, 0, 0, False, cpu_limit_m=1000)
+        limited = model2.pods["ns/p"].state
+        assert unlimited == "HEALTHY"
+        assert limited != "HEALTHY"
+
+    def test_limit_known_round_trips_through_serialization(self):
+        model = StateModel()
+        model.update_pod("ns", "p", 10, 100, 500, 0, 0, False, cpu_limit_m=0)
+        data = model.to_dict()
+        restored = StateModel.from_dict(data)
+        assert restored.pods["ns/p"].cpu_limit_known is False

@@ -77,23 +77,31 @@ def calculate_risk(pod_metrics, markov_state, markov_p_critical, markov_p_failed
                 # Only escalate for moderate TTF if memory is already notable
                 lr *= 1.5
 
-    # CPU percentage
-    if cpu_pct > 95:
-        lr *= 3.0
-    elif cpu_pct > 80:
-        lr *= 1.5
+    # CPU percentage. Only meaningful when the pod actually declares a CPU
+    # limit: ``get_pod_cpu_limit`` returns 0 for an unlimited container, and
+    # without this gate the synthetic 1000m default made a legal burst look
+    # like saturation (live: prometheus with no requests/limits at all showed
+    # 125% for 1.25 cores on a 96-core node and scored 0.71).
+    cpu_limit_known = pod_metrics.get("cpu_limit_known", True)
+    if cpu_limit_known:
+        if cpu_pct > 95:
+            lr *= 3.0
+        elif cpu_pct > 80:
+            lr *= 1.5
 
     # CPU trend (rapid CPU growth is a warning sign). The thresholds are
     # calibrated for a single core (1000 millicores) — normalize absolute
     # millicores/min against the pod's total CPU limit so a 16-core pod's
     # natural load jitter isn't mistaken for saturation (mirror of the
-    # cpu_pct normalization).
-    cpu_limit = pod_metrics.get("cpu_limit_m", 0) or 1000
-    cpu_trend_norm = cpu_trend / (cpu_limit / 1000.0)
-    if cpu_trend_norm > 50:  # >50 single-core-equivalent millicores/min
-        lr *= 2.0
-    elif cpu_trend_norm > 20:
-        lr *= 1.3
+    # cpu_pct normalization). Both the ratio and the trend normalization are
+    # limit-relative, so neither can be computed without a limit.
+    if cpu_limit_known:
+        cpu_limit = pod_metrics.get("cpu_limit_m", 0) or 1000
+        cpu_trend_norm = cpu_trend / (cpu_limit / 1000.0)
+        if cpu_trend_norm > 50:  # >50 single-core-equivalent millicores/min
+            lr *= 2.0
+        elif cpu_trend_norm > 20:
+            lr *= 1.3
 
     # Restart rate. restart_rate = restart_count / pod_age_hours decays toward
     # 0 but never reaches it, so the old `> 0` branch applied a permanent

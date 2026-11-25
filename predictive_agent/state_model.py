@@ -20,7 +20,8 @@ _KALMAN_CPU_MEASUREMENT_NOISE = float(os.environ.get("KALMAN_CPU_MEASUREMENT_NOI
 _STATE_HYSTERESIS = int(os.environ.get("STATE_HYSTERESIS", "2"))
 
 
-def classify_state(memory_pct, cpu_pct, restart_rate, log_errors, node_pressure, markov_state):
+def classify_state(memory_pct, cpu_pct, restart_rate, log_errors, node_pressure,
+                   markov_state, cpu_limit_known=True):
     """Classify pod state based on current metrics.
 
     Args:
@@ -30,6 +31,9 @@ def classify_state(memory_pct, cpu_pct, restart_rate, log_errors, node_pressure,
         log_errors: Log error count
         node_pressure: Whether node is under memory/disk pressure
         markov_state: Current Markov chain state
+        cpu_limit_known: False when no container declares a CPU limit, in which
+            case cpu_pct is measured against a synthetic 1000m scale and must
+            not be read as saturation (a burst is legal without a limit).
 
     Returns:
         str: One of HEALTHY, DEGRADED, STRESSED, CRITICAL
@@ -46,15 +50,18 @@ def classify_state(memory_pct, cpu_pct, restart_rate, log_errors, node_pressure,
     elif memory_pct > 50:
         score += 1
 
-    # CPU scoring
-    if cpu_pct > 95:
-        score += 4
-    elif cpu_pct > 80:
-        score += 3
-    elif cpu_pct > 60:
-        score += 2
-    elif cpu_pct > 40:
-        score += 1
+    # CPU scoring. Only when a real CPU limit exists: without one there is no
+    # ceiling to saturate (cpu_pct then uses the synthetic 1000m scale), and an
+    # unlimited pod on a big node routinely and legally exceeds one core.
+    if cpu_limit_known:
+        if cpu_pct > 95:
+            score += 4
+        elif cpu_pct > 80:
+            score += 3
+        elif cpu_pct > 60:
+            score += 2
+        elif cpu_pct > 40:
+            score += 1
 
     # Restart scoring. restart_rate = restart_count / pod_age_hours, which
     # decays toward 0 but never reaches it, so the old `> 0` branch parked a
@@ -132,7 +139,17 @@ class PodTracker:
         self.memory_limit_mib = 0
         self.cpu_m = 0
         self.cpu_limit_m = 1000
+        # False when no container in the pod declares a CPU limit. cpu_limit_m
+        # then keeps its 1000m default purely as a numeric scale; consumers
+        # must not treat cpu_pct as limit-relative saturation.
+        self.cpu_limit_known = True
         self.restart_count = 0
+        # Restarts per hour (restart_count / pod age). The raw counter is
+        # cumulative for the pod's whole lifetime and never resets, so any
+        # consumer asking "is this pod restarting?"/"no recent restarts" must
+        # use this rate instead of restart_count > 0 — otherwise every pod that
+        # ever restarted is treated as failing forever.
+        self.restart_rate = 0.0
         self.log_errors = 0
         self.node_pressure = False
         self.node_disk_pressure = False
@@ -158,7 +175,8 @@ class PodTracker:
         self.memory_mib = memory_mib
         self.memory_limit_mib = memory_limit_mib
         self.cpu_m = cpu_m
-        self.cpu_limit_m = cpu_limit_m if cpu_limit_m and cpu_limit_m > 0 else 1000
+        self.cpu_limit_known = bool(cpu_limit_m and cpu_limit_m > 0)
+        self.cpu_limit_m = cpu_limit_m if self.cpu_limit_known else 1000
         self.restart_count = restart_count
         self.log_errors = log_errors
         self.node_pressure = node_pressure
@@ -188,6 +206,7 @@ class PodTracker:
         # Calculate restart rate per hour from pod age
         age_s = (datetime.now(timezone.utc) - self._created_at).total_seconds() if self._created_at else 3600
         restart_rate = restart_count / max(age_s / 3600, 1.0)  # restarts per hour
+        self.restart_rate = restart_rate
 
         self.prev_state = self.state
         # Debounced classification: commit a state change only after
@@ -199,7 +218,8 @@ class PodTracker:
             restart_rate=restart_rate,  # per hour, not raw count
             log_errors=log_errors,
             node_pressure=node_pressure,
-            markov_state=self.state
+            markov_state=self.state,
+            cpu_limit_known=self.cpu_limit_known,
         )
         if raw == self.state:
             self._pending_state = None
@@ -323,6 +343,7 @@ class StateModel:
                 "memory_limit_mib": pod.memory_limit_mib,
                 "cpu_m": pod.cpu_m,
                 "cpu_limit_m": pod.cpu_limit_m,
+                "cpu_limit_known": pod.cpu_limit_known,
                 "restart_count": pod.restart_count,
                 "log_errors": pod.log_errors,
                 "node_pressure": pod.node_pressure,
@@ -349,6 +370,9 @@ class StateModel:
                 tracker.memory_limit_mib = pod_data["memory_limit_mib"]
                 tracker.cpu_m = pod_data["cpu_m"]
                 tracker.cpu_limit_m = pod_data.get("cpu_limit_m", 1000)
+                # Default True: state files written before the flag existed
+                # only ever contained real (or defaulted) limits.
+                tracker.cpu_limit_known = pod_data.get("cpu_limit_known", True)
                 tracker.restart_count = pod_data["restart_count"]
                 tracker.log_errors = pod_data["log_errors"]
                 tracker.node_pressure = pod_data["node_pressure"]

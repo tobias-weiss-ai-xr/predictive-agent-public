@@ -22,22 +22,16 @@ let
   predictiveAgentPackage = pkgs.runCommand "predictive-agent-package" {} ''
     mkdir -p $out/opt/predictive-agent/predictive_agent/actions
     mkdir -p $out/opt/predictive-agent/predictive_agent/tests/benchmark
-    
-    # Main package files
+
+    # Every module in the package root (main package, optimizer, cache,
+    # llm_batch, OPA integration, ...). Do NOT add individual per-file
+    # `cp <path-to-one-file> $out/.../` lines: when a Nix path literal names a
+    # single FILE, the store path is named `<hash>-foo.py`, and cp then keeps
+    # that whole basename — producing unimportable `1nxrd...-opa_client.py`
+    # duplicates in the image (7 of them until v4.1.6). The glob below already
+    # copies everything, including new modules.
     cp ${../predictive_agent}/*.py $out/opt/predictive-agent/predictive_agent/
     cp ${../predictive_agent/actions}/*.py $out/opt/predictive-agent/predictive_agent/actions/
-    
-    # Optimization modules (NEW in v4.0.1)
-    cp ${../predictive_agent/l1_cache.py} $out/opt/predictive-agent/predictive_agent/
-    cp ${../predictive_agent/llm_batch.py} $out/opt/predictive-agent/predictive_agent/
-    cp ${../predictive_agent/optimize.py} $out/opt/predictive-agent/predictive_agent/
-    cp ${../predictive_agent/demo_optimizations.py} $out/opt/predictive-agent/predictive_agent/
-    
-    # OPA Integration modules (NEW in v4.0.8.1)
-    cp ${../predictive_agent/opa_client.py} $out/opt/predictive-agent/predictive_agent/
-    cp ${../predictive_agent/opa_cache.py} $out/opt/predictive-agent/predictive_agent/
-    cp ${../predictive_agent/opa_integration.py} $out/opt/predictive-agent/predictive_agent/
-    
     # Benchmark test modules
     cp ${../tests/benchmark}/* $out/opt/predictive-agent/predictive_agent/tests/benchmark/ 2>/dev/null || true
     
@@ -65,7 +59,7 @@ let
 in
 pkgs.dockerTools.buildLayeredImage {
   name = "predictive-agent";
-  tag = "v4.1.5-nix";
+  tag = "v4.1.7-nix";
 
   contents = with pkgs; [
     python3  # AlertWatch uses stdlib urllib only (no requests in the image)
@@ -95,7 +89,7 @@ pkgs.dockerTools.buildLayeredImage {
     ];
     Cmd = [];
     Env = [
-      "OPERATOR_VERSION=4.1.5"
+      "OPERATOR_VERSION=4.1.7"
       "OPERATOR_NAME=predictive-agent"
       "OPERATOR_NAMESPACE=predictive-agent"
       "OPERATOR_WATCH_NAMESPACES=openedusuite,default,llm"

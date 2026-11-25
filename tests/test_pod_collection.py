@@ -416,3 +416,46 @@ def test_get_rs_json_parses_once_within_window(monkeypatch):
     assert d1 == d2 == {"items": [{"metadata": {"name": "r1", "namespace": "ns"},
                                    "spec": {"replicas": 0}}]}
     assert parse_count["n"] == 1, f"parsed {parse_count['n']} times"
+
+
+class TestGhostReplicasetHoist:
+    """Perf regression (2026-11-25 audit).
+
+    ``is_pod_ghost`` calls ``get_ghost_replicasets(rs_json)`` and runs twice per
+    tracked pod (collect_metrics + evaluate_pods). Rebuilding the dead-RS set on
+    every call meant 1,004 full scans of a 764-ReplicaSet list per reconcile —
+    1.9s cumulative (26% of a 7.4s cycle, 2.77M dict lookups). The set is now
+    derived once per phase and passed in as ``ghost_rs``.
+    """
+
+    def _rs_json(self, n_dead=3, n_live=5):
+        items = [{"metadata": {"name": f"dead-{i}"}, "spec": {"replicas": 0}}
+                 for i in range(n_dead)]
+        items += [{"metadata": {"name": f"live-{i}"}, "spec": {"replicas": 2}}
+                  for i in range(n_live)]
+        return {"items": items}
+
+    def test_ghost_set_is_correct(self):
+        from predictive_agent.pod_collection import get_ghost_replicasets
+
+        assert get_ghost_replicasets(self._rs_json()) == {"dead-0", "dead-1", "dead-2"}
+
+    def test_passing_precomputed_set_gives_same_answer(self):
+        from predictive_agent.pod_collection import get_ghost_replicasets, is_pod_ghost
+
+        rs = self._rs_json()
+        ghost_rs = get_ghost_replicasets(rs)
+        pod = {
+            "metadata": {"namespace": "ns", "ownerReferences": [
+                {"kind": "ReplicaSet", "name": "dead-1"}]},
+            "status": {"phase": "Running"},
+        }
+        assert is_pod_ghost(pod, rs) is True
+        assert is_pod_ghost(pod, rs, ghost_rs) is True
+
+        live = {
+            "metadata": {"namespace": "ns", "ownerReferences": [
+                {"kind": "ReplicaSet", "name": "live-0"}]},
+            "status": {"phase": "Running"},
+        }
+        assert is_pod_ghost(live, rs, ghost_rs) is False

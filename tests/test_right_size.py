@@ -102,3 +102,39 @@ class TestRightSizeExecute:
         ctx = ActionContext(namespace="default", dry_run=True)
         result = action.execute("pod-1", ctx)
         assert result.command == ""
+
+
+class TestRightSizeRecentRestarts:
+    """Regression (2026-11-25 audit): ``restart_count > 0`` is cumulative.
+
+    ``restartCount`` never resets for a pod's lifetime, so gating right-sizing
+    advice on ``restart_count > 0`` permanently disabled the action for almost
+    every long-lived pod — the docstring's intent was "no RECENT restarts".
+    The gate must use the age-normalised restart rate when the tracker exposes
+    it, and stay conservative when it does not.
+    """
+
+    def test_pod_with_old_restarts_is_eligible(self):
+        action = RightSizeAction()
+        pod = MagicMock(
+            restart_count=9, restart_rate=0.02, data_points=50,
+            namespace="default", cpu_pct=10.0, memory_pct=10.0,
+        )
+        assert action.should_execute(pod, None, 0.55) is True
+
+    def test_actively_restarting_pod_is_not_eligible(self):
+        action = RightSizeAction()
+        pod = MagicMock(
+            restart_count=9, restart_rate=8.0, data_points=50,
+            namespace="default", cpu_pct=10.0, memory_pct=10.0,
+        )
+        assert action.should_execute(pod, None, 0.55) is False
+
+    def test_falls_back_to_restart_count_when_rate_unknown(self):
+        """Older state objects have no restart_rate: behave conservatively."""
+        action = RightSizeAction()
+        pod = MagicMock(spec=["restart_count", "data_points", "namespace"])
+        pod.restart_count = 2
+        pod.data_points = 50
+        pod.namespace = "default"
+        assert action.should_execute(pod, None, 0.55) is False

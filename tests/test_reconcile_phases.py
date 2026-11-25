@@ -58,7 +58,7 @@ _DEFAULT_HOOKS = dict(
     get_pod_restart_count=lambda p: 0,
     should_skip_namespace=lambda ns: False,
     is_pod_excluded=lambda p: False,
-    is_pod_ghost=lambda p, rs=None: False,
+    is_pod_ghost=lambda p, rs=None, ghost_rs=None: False,
     get_node_pressure=lambda conds, node: (False, False),
     matches_docker_selectors=lambda info, sel: True,
     get_container_memory_limit=lambda info: 0,
@@ -838,7 +838,7 @@ def test_evaluate_pods_skips_ghost_pods():
         notifier=notifier, remediation_manager=FakeRemediationManager(),
         policy_engine=MockPolicy(),
         get_rs_json=lambda: {"items": []},
-        is_pod_ghost=lambda pod, rs=None: True,  # every pod flagged as ghost
+        is_pod_ghost=lambda pod, rs=None, ghost_rs=None: True,  # every pod flagged as ghost
     )
     phases.evaluate_pods(ctx, 1, "kubernetes", [ghost], {}, {}, set())
     assert notifier.notify.call_count == 0
@@ -852,7 +852,7 @@ def test_evaluate_pods_skips_ghost_pods():
         notifier=MagicMock(), remediation_manager=FakeRemediationManager(),
         policy_engine=MockPolicy(),
         get_rs_json=lambda: {"items": []},
-        is_pod_ghost=lambda pod, rs=None: False,
+        is_pod_ghost=lambda pod, rs=None, ghost_rs=None: False,
     )
     phases.evaluate_pods(ctx2, 1, "kubernetes", [live], {}, {}, set())
     assert ctx2.state_model.pods
@@ -1281,3 +1281,89 @@ def test_evaluate_pods_fetches_rs_json_once(monkeypatch, basic_state_model):
     )
     # The RS list must be fetched exactly once for the whole loop.
     assert calls["n"] == 1, f"get_rs_json called {calls['n']} times"
+
+
+def test_record_backtest_ignores_cumulative_restart_count():
+    """A pod that restarted long ago is NOT currently failing.
+
+    ``restartCount`` is cumulative for the pod's lifetime and never resets, so
+    ``restart_count > 0`` labelled every pod that ever restarted as a failure
+    forever — measured live: 3,582 of 10,000 pairs wrongly counted as
+    "failure occurred, predicted safe" in a healthy cluster, which poisoned the
+    /backtest Brier score and confusion matrix.
+    """
+    model = StateModel()
+    model.update_pod("ns", "p1", 10, 100, 10, 0, 0, False)
+    tracker = model.pods["ns/p1"]
+    # Healthy right now, but has 7 historical restarts and a long uptime.
+    tracker.restart_count = 7
+    tracker.state = "HEALTHY"
+    tracker.restart_rate = 0.01  # 7 restarts over weeks
+    predictor = Predictor(risk_threshold=0.0)
+    predictor._predictions["ns/p1"] = MagicMock(
+        risk_score=0.2, ttf_minutes=None, confidence=0.8, markov_state="HEALTHY",
+        memory_trend=0.0, cpu_trend=0.0, memory_pct=10.0, cpu_pct=1.0)
+    backtester = MagicMock()
+    ctx = _build_ctx(state_model=model, predictor=predictor, backtester=backtester)
+
+    phases.record_backtest_predictions(ctx)
+
+    assert backtester.record_outcome.call_args.kwargs["actual_failure"] is False
+
+
+def test_record_backtest_flags_actively_restarting_pod():
+    """A pod crash-looping right now must still count as a failure."""
+    model = StateModel()
+    model.update_pod("ns", "p1", 10, 100, 10, 0, 0, False)
+    tracker = model.pods["ns/p1"]
+    tracker.restart_count = 12
+    tracker.state = "HEALTHY"  # debounced state can lag a fresh restart
+    tracker.restart_rate = 30.0  # 30 restarts/hour => actively failing
+    predictor = Predictor(risk_threshold=0.0)
+    predictor._predictions["ns/p1"] = MagicMock(
+        risk_score=0.9, ttf_minutes=5, confidence=0.8, markov_state="HEALTHY",
+        memory_trend=0.0, cpu_trend=0.0, memory_pct=10.0, cpu_pct=1.0)
+    backtester = MagicMock()
+    ctx = _build_ctx(state_model=model, predictor=predictor, backtester=backtester)
+
+    phases.record_backtest_predictions(ctx)
+
+    assert backtester.record_outcome.call_args.kwargs["actual_failure"] is True
+
+
+def test_evaluate_pods_derives_ghost_set_once_for_many_pods(monkeypatch):
+    """Perf regression (2026-11-25 audit).
+
+    ``is_pod_ghost`` runs twice per pod (collect + evaluate) and each call used
+    to rebuild the dead-RS set: 1,004 scans of a 764-entry list per reconcile,
+    1.9s cumulative (26% of a 7.4s cycle). evaluate_pods must derive it once.
+    """
+    from predictive_agent import pod_collection
+
+    calls = {"n": 0}
+    real = pod_collection.get_ghost_replicasets
+
+    def counting(rs_json):
+        calls["n"] += 1
+        return real(rs_json)
+
+    monkeypatch.setattr(pod_collection, "get_ghost_replicasets", counting)
+
+    pods = []
+    for i in range(50):
+        pods.append({
+            "metadata": {"name": f"p{i}", "namespace": "ns",
+                         "ownerReferences": [{"kind": "ReplicaSet", "name": "rs-1"}]},
+            "status": {"phase": "Running", "containerStatuses": []},
+            "spec": {"containers": []},
+        })
+    ctx = _build_ctx(
+        state_model=StateModel(),
+        get_rs_json=lambda: {"items": [
+            {"metadata": {"name": "rs-1"}, "spec": {"replicas": 2}},
+        ]},
+        is_pod_ghost=pod_collection.is_pod_ghost,
+    )
+    phases.evaluate_pods(ctx, 1, "kubernetes", pods, {}, {}, set())
+
+    assert calls["n"] == 1, f"dead-RS set recomputed {calls['n']}x for 50 pods"

@@ -21,6 +21,9 @@ LIMIT_UNDERPROVISION = 0.80      # usage > 80% of limit
 LIMIT_OVERPROVISION = 0.50       # usage < 50% of limit
 MIN_DATA_POINTS = 10             # need at least 10 cycles of data
 RISK_THRESHOLD = 0.5            # lower threshold — advisory action
+# A pod restarting faster than once per hour is not a stable sizing sample.
+# Same 1.0/hour boundary risk.py uses for its "strong signal" restart bucket.
+RECENT_RESTART_RATE = 1.0
 
 
 class RightSizeAction(RemediationAction):
@@ -45,7 +48,16 @@ class RightSizeAction(RemediationAction):
             return False
 
         restart_count = getattr(pod_state, "restart_count", 0)
-        if restart_count > 0:
+        # Gate on RECENT restarts, not the lifetime counter: ``restartCount`` is
+        # cumulative and never resets, so ``restart_count > 0`` permanently
+        # disabled right-sizing for any long-lived pod that ever restarted
+        # (2026-11-25 audit). Prefer the age-normalised rate the tracker now
+        # exposes; fall back to the old conservative rule when it is absent.
+        restart_rate = getattr(pod_state, "restart_rate", None)
+        if isinstance(restart_rate, (int, float)):
+            if restart_rate > RECENT_RESTART_RATE:
+                return False
+        elif restart_count > 0:
             return False
 
         # Need sufficient data points

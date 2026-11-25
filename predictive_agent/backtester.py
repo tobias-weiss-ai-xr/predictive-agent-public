@@ -17,6 +17,8 @@ import json
 import logging
 import os
 import time
+from bisect import bisect_left
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
@@ -179,19 +181,35 @@ class Backtester:
         if not self._predictions or not self._outcomes:
             return report
 
-        # Match predictions to outcomes by pod_key and time proximity
+        # Match predictions to outcomes by pod_key and time proximity.
+        # Index outcomes by pod_key (each list sorted by timestamp) so the
+        # lookup is a binary search instead of a full scan: the naive version
+        # was O(predictions x outcomes) and blocked /backtest for ~10s of CPU
+        # at the 10k/10k caps.
+        outcomes_by_pod: dict = {}
+        for outcome in self._outcomes:
+            outcomes_by_pod.setdefault(outcome.pod_key, []).append(outcome)
+        # Precompute the sorted timestamp list once per pod (a per-prediction
+        # rebuild would reintroduce O(predictions x outcomes_per_pod)).
+        index_by_pod: dict = {}
+        for pod_key, pod_outcomes in outcomes_by_pod.items():
+            pod_outcomes.sort(key=lambda o: o.timestamp)
+            index_by_pod[pod_key] = [o.timestamp for o in pod_outcomes]
+
         matched = []
         for pred in self._predictions:
+            candidates = outcomes_by_pod.get(pred.pod_key)
+            if not candidates:
+                continue
+            idx = bisect_left(index_by_pod[pred.pod_key], pred.timestamp)
             best_outcome = None
             best_dt = float("inf")
-            for outcome in self._outcomes:
-                if outcome.pod_key != pred.pod_key:
-                    continue
-                dt = abs(outcome.timestamp - pred.timestamp)
-                if dt < best_dt and dt <= time_window:
-                    best_dt = dt
-                    best_outcome = outcome
-            if best_outcome is not None:
+            for j in (idx - 1, idx):
+                if 0 <= j < len(candidates):
+                    dt = abs(candidates[j].timestamp - pred.timestamp)
+                    if dt < best_dt:
+                        best_dt, best_outcome = dt, candidates[j]
+            if best_outcome is not None and best_dt <= time_window:
                 matched.append((pred, best_outcome))
 
         report.matched_pairs = len(matched)
@@ -284,9 +302,21 @@ class Backtester:
             logger.debug("Could not write backtest history: %s", e)
 
     def _load_history(self) -> None:
-        """Load existing history from JSONL file."""
+        """Load existing history from JSONL file, keeping only the newest
+        ``MAX_HISTORY_RECORDS`` per record type.
+
+        The cap must be applied *during* the load, not only on the next
+        ``record_*`` call: the JSONL file is allowed to grow to
+        ``MAX_HISTORY_FILE_BYTES`` (256 MiB, ~267 bytes/record => ~960k
+        records), and appending all of them to the in-memory lists before
+        trimming re-created the exact OOM the file cap exists to prevent.
+        A bounded deque is used so peak memory stays at the cap.
+        """
         if not os.path.exists(self.history_file):
             return
+        # Keep only the tail; the lists are consumed oldest-to-newest.
+        predictions: deque = deque(maxlen=MAX_HISTORY_RECORDS)
+        outcomes: deque = deque(maxlen=MAX_HISTORY_RECORDS)
         try:
             with open(self.history_file) as f:
                 for line in f:
@@ -299,7 +329,7 @@ class Backtester:
                         continue
                     rtype = data.pop("_type", None)
                     if rtype == "prediction":
-                        self._predictions.append(PredictionRecord(
+                        predictions.append(PredictionRecord(
                             pod_key=data.get("pod_key", ""),
                             timestamp=data.get("timestamp", 0.0),
                             risk_score=data.get("risk_score", 0.0),
@@ -312,7 +342,7 @@ class Backtester:
                             cpu_trend=data.get("cpu_trend", 0.0),
                         ))
                     elif rtype == "outcome":
-                        self._outcomes.append(OutcomeRecord(
+                        outcomes.append(OutcomeRecord(
                             pod_key=data.get("pod_key", ""),
                             timestamp=data.get("timestamp", 0.0),
                             actual_failure=data.get("actual_failure", False),
@@ -322,3 +352,6 @@ class Backtester:
                         ))
         except OSError as e:
             logger.debug("Could not load backtest history: %s", e)
+            return
+        self._predictions = list(predictions)
+        self._outcomes = list(outcomes)

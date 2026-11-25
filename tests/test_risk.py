@@ -790,3 +790,63 @@ def test_markov_probability_amplification_contract():
     pf_ord = calculate_risk(_metrics(), "HEALTHY", 0.0, 0.2)
     assert pc > 2.0 * base
     assert pf_ord > pc_ord
+
+
+def _score_unlimited_aware(metrics):
+    """Score one pod through the real public entry point."""
+    return calculate_risk(metrics, markov_state="HEALTHY",
+                          markov_p_critical=0.0, markov_p_failed=0.0)
+
+
+class TestUnlimitedCpuIsNotSaturation:
+    """Regression (2026-11-25 audit): containers without a CPU limit.
+
+    ``get_pod_cpu_limit`` returns 0 when no container declares a limit, but the
+    tracker substituted a synthetic 1000m default, so an unlimited pod was
+    scored as if one core were its ceiling. Live example:
+    monitoring/prometheus-58f844dbfc-qtcx2 (no requests/limits at all) showed
+    "cpu=125.2%" for 1.25 cores on a 96-core node and scored 0.71 — above the
+    0.7 alert threshold — with memory at 0.0% (no limit either). Same class as
+    the ollama-next-0 single-core bug fixed in v4.1.1.
+
+    A burst on an unlimited container is legal, so the limit-relative CPU
+    factors must not fire; node-level pressure still applies.
+    """
+
+    def _metrics(self, **over):
+        m = {
+            "memory_pct": 0.0, "cpu_pct": 125.2,
+            "memory_trend_mib_per_min": 4.35, "cpu_trend_m_per_min": 90.8,
+            "restart_rate_per_hr": 0.0, "log_error_rate_per_min": 0.0,
+            "node_memory_pressure": False, "node_disk_pressure": False,
+            "markov_state": "HEALTHY", "memory_limit_mib": 0,
+            "cpu_limit_m": 1000,
+        }
+        m.update(over)
+        return m
+
+    def test_unlimited_cpu_does_not_multiply_risk(self):
+        unlimited = _score_unlimited_aware(self._metrics(cpu_limit_known=False))
+        assert unlimited < 0.5, (
+            f"unlimited container scored {unlimited:.2f} — limit-relative CPU "
+            "factors fired against a synthetic 1000m ceiling")
+
+    def test_limited_cpu_saturation_still_multiplies_risk(self):
+        # 125% of a REAL 1-core limit is genuine saturation.
+        limited = _score_unlimited_aware(self._metrics(cpu_limit_known=True))
+        assert limited > 0.5, f"real saturation scored only {limited:.2f}"
+
+    def test_known_flag_defaults_to_true_for_compatibility(self):
+        without_flag = _score_unlimited_aware(self._metrics())
+        with_flag = _score_unlimited_aware(self._metrics(cpu_limit_known=True))
+        assert without_flag == pytest.approx(with_flag)
+
+    def test_unlimited_node_pressure_still_counts(self):
+        calm = _score_unlimited_aware(self._metrics(cpu_limit_known=False))
+        pressured = _score_unlimited_aware(self._metrics(cpu_limit_known=False,
+                                       node_memory_pressure=True))
+        # Bayesian clamping compresses the 4x node-pressure factor; measured
+        # 0.15 -> 0.41 (2.8x), so assert a clear escalation rather than 3x.
+        assert pressured > calm * 2, (
+            f"node pressure must still escalate unlimited containers "
+            f"(calm={calm:.2f} pressured={pressured:.2f})")

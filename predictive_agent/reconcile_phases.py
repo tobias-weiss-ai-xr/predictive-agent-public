@@ -102,7 +102,7 @@ class ReconcileContext:
     get_pod_restart_count: Callable[[dict], int]
     should_skip_namespace: Callable[[str], bool]
     is_pod_excluded: Callable[[dict], bool]
-    is_pod_ghost: Callable[[dict, Optional[dict]], bool]
+    is_pod_ghost: Callable[..., bool]
     get_node_pressure: Callable[[dict, str], Tuple[bool, bool]]
     matches_docker_selectors: Callable[[dict, dict], bool]
     get_container_memory_limit: Callable[[dict], int]
@@ -257,9 +257,14 @@ def collect_metrics(ctx: ReconcileContext, cycle: int) -> CollectResult:
                 rs_json = {"items": []}
             if not isinstance(rs_json, dict):
                 rs_json = {"items": []}
+            # Derive the dead-RS set once for the whole batch: is_pod_ghost
+            # would otherwise rescan the full RS list for every pod.
+            from predictive_agent.pod_collection import get_ghost_replicasets
+
+            ghost_rs = get_ghost_replicasets(rs_json)
             pod_items = [
                 pod for pod in pod_items
-                if not ctx.is_pod_ghost(pod, rs_json)
+                if not ctx.is_pod_ghost(pod, rs_json, ghost_rs)
             ]
 
             # An empty pod list is a valid collection result (no pods match
@@ -403,6 +408,7 @@ def evaluate_pods(
     # RS list for ghost detection — fetched lazily on first use, then reused
     # for the whole cycle (see note at the loop). None = not fetched yet.
     ghost_rs_json: Optional[dict] = None
+    ghost_rs: Set[str] = set()
     # Flood guard (2026-11-19): escalated pods are aggregated per reconcile
     # cycle and emitted as ONE remediation_exhausted summary, throttled 600s,
     # instead of one webhook per pod.
@@ -423,7 +429,12 @@ def evaluate_pods(
                 ghost_rs_json = ctx.get_rs_json()
             except Exception:  # noqa: BLE001 - ghost detection must not fail
                 ghost_rs_json = {"items": []}
-        if ctx.is_pod_ghost(pod, ghost_rs_json):
+            # Derived once here as well (see the RS hoist above): recomputing
+            # the dead-RS set per pod rescanned 764 entries 1,004x/cycle.
+            from predictive_agent.pod_collection import get_ghost_replicasets
+
+            ghost_rs = get_ghost_replicasets(ghost_rs_json)
+        if ctx.is_pod_ghost(pod, ghost_rs_json, ghost_rs):
             continue
         # Handle degraded mode pods (use existing tracker data)
         if pod.get("_degraded_mode"):
@@ -678,6 +689,15 @@ def evaluate_pods(
                 markov_p_failed=markov_p_failed,
                 cpu_trend_m_per_min=tracker.cpu_trend,
                 cpu_limit_m=cpu_limit_m,
+                # 0 from get_pod_cpu_limit means NO limit declared, not a
+                # 0m ceiling; without this, risk.py and classify_state score
+                # a legal burst against a synthetic 1000m core (live case:
+                # prometheus, no requests/limits, 125% "of a fake core" ->
+                # 0.71). Degraded-mode trackers keep their last-known truth.
+                cpu_limit_known=bool(
+                    cpu_limit_m and cpu_limit_m > 0
+                ) if not pod.get("_degraded_mode")
+                else getattr(tracker, "cpu_limit_known", True),
                 memory_anomaly_score=tracker.memory_anomaly_score,
                 cpu_anomaly_score=tracker.cpu_anomaly_score,
                 blast_radius=blast_radius,
@@ -1213,10 +1233,17 @@ def record_backtest_predictions(ctx: ReconcileContext) -> None:
                     memory_trend=pred.memory_trend,
                     cpu_trend=pred.cpu_trend,
                 )
-                # Record outcome: failure if pod is in unhealthy state or has restarts
+                # Record outcome: failure if the pod is unhealthy RIGHT NOW.
+                # Do NOT use restart_count > 0: that counter is cumulative for
+                # the pod's lifetime, so it permanently labelled every pod that
+                # ever restarted as a failure (live measurement: 3,582 of
+                # 10,000 pairs counted as false negatives in a healthy
+                # cluster, poisoning the /backtest Brier score). Use the
+                # age-normalised restart rate instead, matching how risk.py and
+                # classify_state judge a restart signal.
                 actual_failure = (
                     tracker.state in ("CRITICAL", "FAILED")
-                    or tracker.restart_count > 0
+                    or getattr(tracker, "restart_rate", 0.0) > 1.0
                 )
                 ctx.backtester.record_outcome(
                     pod_key=pod_key,
