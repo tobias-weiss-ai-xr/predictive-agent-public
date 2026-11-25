@@ -327,6 +327,7 @@ class NotificationManager:
         risk_score: float,
         action_taken: str,
         details: str = "",
+        status: str = "firing",
     ) -> tuple[bool, bool]:
         """Send notification on the configured channel(s).
 
@@ -341,6 +342,10 @@ class NotificationManager:
             risk_score: Risk score (0.0-1.0)
             action_taken: Remediation action taken (e.g., "pod_restart", "node_cordon")
             details: Additional details (JSON string or free text)
+            status: Alertmanager lifecycle state — "firing" (default) or
+                "resolved". Resolved closes the same incident (same
+                alert_type + pod) instead of opening a new one, so operators
+                see a task complete rather than double-alert.
 
         Returns:
             (email_sent, webhook_sent) tuple of booleans
@@ -385,7 +390,7 @@ class NotificationManager:
                     risk_score=risk_score,
                     action_taken=action_taken,
                     details=details,
-                    status="firing",
+                    status=status,
                 )
             webhook_sent = self.webhook.send(payload)
 
@@ -397,6 +402,7 @@ class NotificationManager:
                 "pod_name": pod_name,
                 "risk_score": risk_score,
                 "action_taken": action_taken,
+                "status": status,
                 "email_sent": email_sent,
                 "webhook_sent": webhook_sent,
                 "channel": channel,

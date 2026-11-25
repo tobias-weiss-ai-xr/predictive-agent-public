@@ -83,6 +83,11 @@ class ReconcileContext:
     # Mutable module state (shared references — mutations are visible)
     llm_analysis_cache: Dict[str, float]
     llm_in_flight: Set[str]
+    # pod_keys with a currently-firing risk alert (auto-resolve lifecycle).
+    # A pod is added when it crosses the risk threshold and removed (with a
+    # "resolved" notification) when it drops below or disappears, so the
+    # matrix alertbridge sees the incident close instead of a new firing.
+    risk_firing: Set[str]
     last_plan_notify: Dict[str, Tuple[str, float]]
     last_autonomy_notify: Dict[str, Tuple[str, float]]
 
@@ -351,6 +356,21 @@ def prepare_state_model(
             # Also remove stale prediction to prevent memory leak
             if ctx.predictor is not None and pod_key in ctx.predictor._predictions:
                 del ctx.predictor._predictions[pod_key]
+            # Auto-resolve: close any firing risk alert for the removed pod.
+            if pod_key in ctx.risk_firing:
+                ctx.risk_firing.discard(pod_key)
+                if ctx.notifier is not None:
+                    try:
+                        ctx.notifier.notify(
+                            alert_type="plan",
+                            pod_name=pod_key,
+                            risk_score=0.0,
+                            action_taken="",
+                            details="Pod no longer present — incident resolved",
+                            status="resolved",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
             # Clean up LLM analysis cache entry for removed pod
             ctx.llm_analysis_cache.pop(pod_key, None)
             ctx.llm_in_flight.discard(pod_key)
@@ -723,6 +743,7 @@ def evaluate_pods(
 
             if result.risk_score >= ctx.predictor.risk_threshold:
                 at_risk_count += 1
+                ctx.risk_firing.add(pod_key)
                 # Surface the planned intervention sequence for operator visibility.
                 # This only *plans* (no execution); the REM-8 block below executes
                 # via plan_and_execute using the same model and pod state.
@@ -963,6 +984,28 @@ def evaluate_pods(
                             )
                     ctx.remediation_manager.outcome_alerts.clear()
 
+
+            # Auto-resolve (P0 lifecycle): a pod that previously fired a risk
+            # alert and is now below the threshold closes the incident with a
+            # "resolved" Alertmanager notification instead of leaving it
+            # permanently firing. Only pods that actually fired are resolved.
+            elif pod_key in ctx.risk_firing:
+                ctx.risk_firing.discard(pod_key)
+                if ctx.notifier is not None:
+                    try:
+                        ctx.notifier.notify(
+                            alert_type="plan",
+                            pod_name=pod_key,
+                            risk_score=result.risk_score,
+                            action_taken="",
+                            details=(
+                                f"Risk back below threshold ({ctx.predictor.risk_threshold:.2f}): "
+                                f"score={result.risk_score:.2f} state={markov_state} — incident resolved"
+                            ),
+                            status="resolved",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
     # ─── Aggregated escalation notify (flood control) ───────────────────────
     # One remediation_exhausted summary per 600s window listing every pod that
     # escalated this cycle. An operator restart resets the (in-memory) futile

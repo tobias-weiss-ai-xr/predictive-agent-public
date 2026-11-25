@@ -89,6 +89,9 @@ _policy_engine = None
 _llm_analyzer = None
 _llm_analysis_cache: dict[str, float] = {}  # pod_key -> last analysis timestamp
 _llm_in_flight: set = set()  # pod_keys with an active background LLM analysis
+# pod_keys with a currently-firing risk alert; cleared with a "resolved"
+# notification when the pod recovers or disappears (auto-resolve lifecycle).
+_risk_firing: set = set()
 _llm_lock = threading.Lock()  # guards _llm_calls/_llm_errors counters
 
 
@@ -165,6 +168,7 @@ def _build_context() -> "phases.ReconcileContext":
         backtester=_backtester,
         llm_analysis_cache=_llm_analysis_cache,
         llm_in_flight=_llm_in_flight,
+        risk_firing=_risk_firing,
         last_plan_notify=_last_plan_notify,
         last_autonomy_notify=_last_autonomy_notify,
         alert_feed=_alert_feed,

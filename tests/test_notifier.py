@@ -595,3 +595,27 @@ class TestNotificationManagerAlertmanager:
         payload = webhook.send.call_args[0][0]
         assert payload["status"] == "resolved"
         assert payload["alerts"][0]["status"] == "resolved"
+
+
+    def test_notify_resolved_status_matrix(self):
+        """notify(status='resolved') closes the Alertmanager v4 incident: same
+        alertname+pod group key, status resolved, endsAt set."""
+        manager, email, webhook = self._make_manager()
+        manager.notify("plan", "api-server", 0.0, "", "risk below threshold",
+                       status="resolved")
+        payload = webhook.send.call_args[0][0]
+        assert payload["status"] == "resolved"
+        alert = payload["alerts"][0]
+        assert alert["status"] == "resolved"
+        assert alert["labels"]["alertname"] == "plan"
+        assert alert["labels"]["pod"] == "api-server"
+        # Closure keeps the same groupKey as the firing payload so the
+        # alertbridge treats this as resolve, not a new incident.
+        assert alert["endsAt"] == alert["startsAt"]
+
+    def test_notify_resolved_records_in_history(self):
+        """Resolved notifications are recorded with their status."""
+        manager, email, webhook = self._make_manager()
+        manager.notify("plan", "api-server", 0.0, "", "", status="resolved")
+        assert manager.history[-1]["status"] == "resolved"
+        assert manager.history[-1]["pod_name"] == "api-server"

@@ -97,6 +97,7 @@ def _build_ctx(state_model=None, predictor=None, remediation_manager=None,
         backtester=backtester,
         llm_analysis_cache={},
         llm_in_flight=set(),
+        risk_firing=set(),
         last_plan_notify={},
         last_autonomy_notify={},
         **merged,
@@ -1396,3 +1397,88 @@ def test_qtable_persist_failure_reports_self_health_and_continues():
         assert notifier.email.send.call_count == 1
     finally:
         phases.reset_self_health()
+
+
+# ── Auto-resolve (P0: risk-alert lifecycle, firing -> resolved) ─────────────
+
+
+def _risk_cheap_ctx(predictor):
+    model = StateModel()
+    notifier = MagicMock()
+    remediation = FakeRemediationManager()
+    remediation.plan_remediation.return_value = {
+        "horizon": 1, "steps": [{"action": "restart", "rationale": "hot"}]}
+    remediation.plan_and_execute.return_value = []
+    return _build_ctx(state_model=model, predictor=predictor, notifier=notifier,
+                      remediation_manager=remediation, policy_engine=MockPolicy())
+
+
+def _plan_calls(notifier):
+    return [c for c in notifier.notify.call_args_list
+            if c.kwargs.get("alert_type") == "plan"]
+
+
+def _resolved_calls(notifier):
+    return [c for c in notifier.notify.call_args_list
+            if c.kwargs.get("status") == "resolved"]
+
+
+def test_evaluate_pods_tracks_fired_risk_alert():
+    predictor = Predictor(risk_threshold=0.0)
+    ctx = _risk_cheap_ctx(predictor)
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _plan_calls(ctx.notifier), "firing plan alert should be sent"
+    assert "default/p1" in ctx.risk_firing
+
+
+def test_evaluate_pods_resolves_alert_on_recovery():
+    predictor = Predictor(risk_threshold=0.0)
+    ctx = _risk_cheap_ctx(predictor)
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert "default/p1" in ctx.risk_firing
+    ctx.notifier.reset_mock()
+    # Healthy risk (~0.15) drops below the raised threshold: pod recovered.
+    ctx.predictor.risk_threshold = 0.9
+    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    resolved = _resolved_calls(ctx.notifier)
+    assert len(resolved) == 1
+    assert resolved[0].kwargs["pod_name"] == "default/p1"
+    assert resolved[0].kwargs["alert_type"] == "plan"
+    assert "default/p1" not in ctx.risk_firing
+
+
+def test_evaluate_pods_resolves_alert_when_pod_disappears():
+    predictor = Predictor(risk_threshold=0.0)
+    ctx = _risk_cheap_ctx(predictor)
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert "default/p1" in ctx.risk_firing
+    ctx.notifier.reset_mock()
+    # Pod gone from the cluster: the removal happens in prepare_state_model
+    # (mirrors main.reconcile's collect -> prepare -> evaluate sequence with
+    # the pod no longer present), which closes the firing alert once.
+    phases.prepare_state_model(ctx, 2, "HEALTHY", set(), [])
+    phases.evaluate_pods(ctx, 2, "kubernetes", [], {}, {}, set())
+    resolved = _resolved_calls(ctx.notifier)
+    assert len(resolved) == 1
+    assert resolved[0].kwargs["pod_name"] == "default/p1"
+    assert "default/p1" not in ctx.risk_firing
+
+
+def test_evaluate_pods_no_resolve_while_still_at_risk():
+    predictor = Predictor(risk_threshold=0.0)
+    ctx = _risk_cheap_ctx(predictor)
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    ctx.notifier.reset_mock()
+    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _resolved_calls(ctx.notifier) == []
+    assert "default/p1" in ctx.risk_firing
+
+
+def test_evaluate_pods_no_resolve_without_prior_firing():
+    # Pod never at risk -> never fires -> never resolves.
+    predictor = Predictor(risk_threshold=0.9)
+    ctx = _risk_cheap_ctx(predictor)
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _resolved_calls(ctx.notifier) == []
+    assert ctx.risk_firing == set()

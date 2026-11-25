@@ -6,7 +6,7 @@ import os
 # ─── Core ────────────────────────────────────────────────────────────────────
 OPERATOR_NAME = os.environ.get("OPERATOR_NAME", "predictive-agent")
 OPERATOR_NAMESPACE = os.environ.get("OPERATOR_NAMESPACE", "predictive-agent")
-OPERATOR_VERSION = "4.1.0"
+OPERATOR_VERSION = os.environ.get("OPERATOR_VERSION", "4.1.0")
 WATCH_NAMESPACES = os.environ.get(
     "OPERATOR_WATCH_NAMESPACES", "openedusuite,default,llm"
 ).split(",")
@@ -114,13 +114,16 @@ UNHEALTHY_STATUSES = {
 SKIP_LOGS_STATUSES = {
     "ImagePullBackOff", "ErrImagePull", "ContainerCreating",
     "PodInitializing", "CreateContainerError", "CreateContainerConfigError", "Pending",
+    # Succeeded pods are skipped from evaluation entirely — never pay a
+    # kubectl logs call for them (observed 2026-11-24: 225 Succeeded
+    # leftovers triggered per-cycle log fetches that were discarded).
     "Succeeded",
 }
 
 # Only fetch container logs when the last (re)start is newer than this
 # window (minutes). Stale restarts (restartCount > 0 from days ago) are
 # already captured by restart_rate; re-fetching logs for them every cycle
-# was the dominant reconcile cost.
+# was the dominant reconcile cost (343 candidates, reconcile 75s > 60s).
 LOG_FETCH_WINDOW_MINUTES = int(os.environ.get("LOG_FETCH_WINDOW_MINUTES", "120"))
 
 # ─── Markov States ───────────────────────────────────────────────────────────
@@ -287,10 +290,15 @@ NOTIFY_CHANNEL = os.environ.get("NOTIFY_CHANNEL", "matrix").lower()
 #     "container": "open-webui",
 #     "image": "registry.local/openedusuite-nix/open-webui:v0.13.3-nix",
 #     "mode": "patch"}]
-# mode: "patch"  -> kubectl set image (no GitOps controller in the way)
-#       "gitops" -> edit the manifest in a local ArgoCD source checkout and
-#                    git commit (+ push when FIX_IMAGE_GITOPS_PUSH=true) so
-#                    selfHeal+prune controllers converge to the new image.
+# The deployed configuration uses mode="patch" -> kubectl set image (no
+# GitOps writes; the HRZ-GitLab gitops-repo wiring was removed 2026-11-18).
+# Targets may be pinned BY DIGEST (e.g. ...@sha256:4aa9306b…) so fixes
+# converge to the deterministic in-cluster nix-builder artifact.
+# mode: "patch"  -> kubectl set image (may be reverted by selfHeal ArgoCD)
+#       "gitops" -> optional/legacy: edit the manifest in a local ArgoCD
+#                    source checkout and git commit (+ push when
+#                    FIX_IMAGE_GITOPS_PUSH=true); not configured in the
+#                    deployed environment.
 FIX_IMAGE_ENABLED = os.environ.get("FIX_IMAGE_ENABLED", "false").lower() in (
     "true", "1", "yes"
 )
@@ -309,7 +317,8 @@ FIX_IMAGE_LOG_PATTERNS = json.loads(
 )
 FIX_IMAGE_LOG_LINES = int(os.environ.get("FIX_IMAGE_LOG_LINES", "60"))
 FIX_IMAGE_RISK_THRESHOLD = float(os.environ.get("FIX_IMAGE_RISK_THRESHOLD", "0.7"))
-# Local checkout of the ArgoCD/GitOps source repo for mode="gitops".
+# Local checkout of the ArgoCD/GitOps source repo for mode="gitops"
+# (optional/legacy — the deployed environment uses mode="patch" only).
 FIX_IMAGE_GITOPS_REPO_DIR = os.environ.get("FIX_IMAGE_GITOPS_REPO_DIR", "")
 FIX_IMAGE_GITOPS_MANIFEST = os.environ.get(
     "FIX_IMAGE_GITOPS_MANIFEST", "k8s/llm/open-webui.yaml"

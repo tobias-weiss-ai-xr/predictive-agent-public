@@ -30,6 +30,7 @@ from predictive_agent.collector import (
     get_collector_state_numeric,
 )
 from predictive_agent.markov import MarkovChain
+from predictive_agent.mcp_server import Tool, handle_request
 from predictive_agent.metrics import collect_decision_metrics, render_prometheus
 from predictive_agent.pomdp import ACTION_TYPES, ActionAwareTransitionModel, ValueIterationPolicy
 
@@ -188,6 +189,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_response(self._notifications_get())
         elif path == "/backtest":
             self._send_response(self._backtest_get())
+        elif path == "/mcp":
+            # Streamable-HTTP transport uses POST; a GET is a protocol error.
+            self._send_response(
+                {"error": "Method Not Allowed: MCP uses POST /mcp"}, status=405)
         elif path == "/benchmark":
             data, status = self._benchmark_get()
             self._send_response(data, status=status)
@@ -237,8 +242,94 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/review":
             data, status = self._review_post()
             self._send_response(data, status=status)
+        elif path == "/mcp":
+            self._handle_mcp()
         else:
             self._send_response({"error": "Not Found"}, status=404)
+
+    # ── MCP (Model Context Protocol, Streamable HTTP) ────────────────────────
+    # Read-only tool surface for AI assistants. POST /mcp speaks JSON-RPC 2.0
+    # per the MCP spec; every tool below snapshots agent state and none of them
+    # mutate the cluster, which is what makes exposing /mcp behind the ingress
+    # acceptable. MAX_MCP_BODY bounds the request so a malformed client cannot
+    # make the operator read unbounded input.
+    MAX_MCP_BODY = 256 * 1024
+
+    def _handle_mcp(self):
+        """Serve one MCP JSON-RPC exchange over HTTP POST."""
+        tools = self._mcp_tools()
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except (TypeError, ValueError):
+            length = 0
+        if length <= 0 or length > self.MAX_MCP_BODY:
+            resp = handle_request(None, tools)  # -> Invalid Request
+            self._send_response(resp, status=200)
+            return
+        raw = self.rfile.read(length)
+        try:
+            payload = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            payload = None  # parse error -> Invalid Request response
+        resp = handle_request(payload, tools)
+        if resp is None:
+            # Notification: spec expects 202 Accepted with an empty body.
+            self.send_response(202)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            return
+        self._send_response(resp, status=200)
+
+    def _mcp_tools(self):
+        """Build the read-only MCP tool registry from live server handlers."""
+        empty_schema = {"type": "object", "properties": {}, "required": []}
+        return {
+            "get_status": Tool(
+                "get_status",
+                "Operator runtime status: reconcile counters, uptime, at-risk count, LLM calls.",
+                empty_schema, lambda args: self._status_dict()),
+            "get_predictions": Tool(
+                "get_predictions",
+                "Current per-pod risk predictions (live Predictor snapshot).",
+                empty_schema, lambda args: self._predictions_dict()),
+            "get_at_risk": Tool(
+                "get_at_risk",
+                "Pods currently at or above the risk threshold.",
+                empty_schema, lambda args: self._at_risk_dict()),
+            "get_state": Tool(
+                "get_state",
+                "Per-pod StateModel tracker snapshot (state, memory/cpu pct, hysteresis).",
+                empty_schema, lambda args: self._state_dict()),
+            "get_history": Tool(
+                "get_history",
+                "Recent analysis-history entries.",
+                empty_schema, lambda args: (_context.history if _context.history else [])),
+            "get_backtest": Tool(
+                "get_backtest",
+                "Backtest accuracy report (confusion matrix + Brier score).",
+                empty_schema, lambda args: self._backtest_get()),
+            "get_alerts": Tool(
+                "get_alerts",
+                "AlertWatch active-alert correlation state.",
+                empty_schema, lambda args: self._alerts_dict()),
+            "get_ceph_health": Tool(
+                "get_ceph_health",
+                "Ceph cluster health via Prometheus.",
+                empty_schema, lambda args: self._ceph_health_dict()),
+        }
+
+    def _at_risk_dict(self):
+        """GET /mcp get_at_risk — pods at/above the risk threshold."""
+        pred = _context.predictor
+        threshold = getattr(pred, "risk_threshold", 0.5) if pred is not None else 0.5
+        pods = []
+        for p in _all_predictions(pred):
+            row = asdict(p)
+            row["pod_key"] = getattr(p, "pod_key", row.get("pod_key"))
+            pods.append(row)
+        pods = [p for p in pods if p.get("risk_score", 0.0) >= threshold]
+        pods.sort(key=lambda p: p.get("risk_score", 0.0), reverse=True)
+        return {"threshold": threshold, "count": len(pods), "pods": pods}
 
     # ── Endpoint payloads ────────────────────────────────────────────────────
     # State name to numeric mapping for Prometheus
