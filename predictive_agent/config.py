@@ -156,6 +156,11 @@ REMEDIATION_RISK_THRESHOLD = float(os.environ.get("REMEDIATION_RISK_THRESHOLD", 
 RESOLVE_HYSTERESIS = float(os.environ.get("RESOLVE_HYSTERESIS", "0.05"))
 RESOLVE_MIN_FIRING_S = int(os.environ.get("RESOLVE_MIN_FIRING_S", "90"))
 RESOLVE_COOLDOWN_S = int(os.environ.get("RESOLVE_COOLDOWN_S", "300"))
+# Sustained-recovery dwell: a pod must sit clearly below the threshold for
+# RESOLVE_DWELL_CYCLES consecutive reconcile cycles before the incident is
+# closed. Oscillating pods around the boundary therefore do not emit a
+# 'resolved' every dip.
+RESOLVE_DWELL_CYCLES = int(os.environ.get("RESOLVE_DWELL_CYCLES", "3"))
 REMEDIATION_PROTECTED_NS = os.environ.get(
     "REMEDIATION_PROTECTED_NS", "kube-system,predictive-agent"
 )

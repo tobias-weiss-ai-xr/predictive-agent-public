@@ -93,6 +93,8 @@ class ReconcileContext:
     #   last_resolve_at: pod_key -> epoch of the last resolve (cooldown base).
     risk_fired_at: Dict[str, float]
     last_resolve_at: Dict[str, float]
+    # Consecutive cycles a firing pod has been clearly below the threshold.
+    risk_below_streak: Dict[str, int]
     last_plan_notify: Dict[str, Tuple[str, float]]
     last_autonomy_notify: Dict[str, Tuple[str, float]]
 
@@ -365,6 +367,7 @@ def prepare_state_model(
             if pod_key in ctx.risk_firing:
                 ctx.risk_firing.discard(pod_key)
                 ctx.risk_fired_at.pop(pod_key, None)
+                ctx.risk_below_streak.pop(pod_key, None)
                 ctx.last_resolve_at[pod_key] = time.time()
                 if ctx.notifier is not None:
                     try:
@@ -739,6 +742,13 @@ def evaluate_pods(
             # AlertWatch: a firing cluster alert for this namespace nudges the
             # risk score up so per-pod signals and Alertmanager agree. The feed
             # is optional and never raises.
+            #
+            # Lifecycle notifications are gated on the *self-signal* score
+            # (before the feed boost): a namespace-wide alert must not fabricate
+            # a per-pod incident. Otherwise every pod in an alerting namespace
+            # fires on the boost and later emits a "resolved" when the cluster
+            # alert clears — the mass resolve flood observed live.
+            self_score = result.risk_score
             alert_feed = getattr(ctx, "alert_feed", None)
             if alert_feed is not None:
                 try:
@@ -749,18 +759,23 @@ def evaluate_pods(
                     pass
 
             now_ts = time.time()
-            if result.risk_score >= ctx.predictor.risk_threshold:
+            below_cutoff = self_score < (
+                ctx.predictor.risk_threshold - config.RESOLVE_HYSTERESIS
+            )
+            if self_score >= ctx.predictor.risk_threshold:
                 at_risk_count += 1
-                ctx.risk_firing.add(pod_key)
-                ctx.risk_fired_at.setdefault(pod_key, now_ts)
+                ctx.risk_below_streak[pod_key] = 0
                 # Cooldown: a pod that just resolved and re-crosses the
                 # threshold within RESOLVE_COOLDOWN_S is threshold jitter, not a
-                # new incident — suppress the firing notification (still counted
-                # as at-risk and executed if remediation is permitted).
+                # new incident. Do not re-open the lifecycle — otherwise every
+                # dip would emit a fresh "resolved", flooding room.
                 in_cooldown = (
                     pod_key in ctx.last_resolve_at
                     and now_ts - ctx.last_resolve_at[pod_key] < config.RESOLVE_COOLDOWN_S
                 )
+                if not in_cooldown:
+                    ctx.risk_firing.add(pod_key)
+                    ctx.risk_fired_at.setdefault(pod_key, now_ts)
                 # Surface the planned intervention sequence for operator visibility.
                 # This only *plans* (no execution); the REM-8 block below executes
                 # via plan_and_execute using the same model and pod state.
@@ -1007,22 +1022,22 @@ def evaluate_pods(
             # "resolved" Alertmanager notification instead of leaving it
             # permanently firing. Only pods that actually fired are resolved.
             elif pod_key in ctx.risk_firing:
-                # Dead-band: require the score to fall clearly below the
-                # threshold, not merely equal to it, so pods hovering at the
-                # boundary do not flap fire/resolve each cycle.
-                resolved_score = result.risk_score < (
-                    ctx.predictor.risk_threshold - config.RESOLVE_HYSTERESIS
-                )
+                # Sustained-recovery dwell: require the score to be clearly
+                # below the threshold for RESOLVE_DWELL_CYCLES consecutive
+                # cycles (a pod hovering/flapping around the boundary must
+                # not emit a "resolved" on every dip).
+                streak = ctx.risk_below_streak.get(pod_key, 0)
+                streak = streak + 1 if below_cutoff else 0
+                ctx.risk_below_streak[pod_key] = streak
                 fired_at = ctx.risk_fired_at.get(pod_key, now_ts)
                 long_enough = (now_ts - fired_at) >= config.RESOLVE_MIN_FIRING_S
-                if not (resolved_score and long_enough):
-                    # Still on the boundary / incident too young: keep firing.
-                    pass
-                else:
+                resolved = streak >= config.RESOLVE_DWELL_CYCLES and long_enough
+                if resolved:
                     ctx.risk_firing.discard(pod_key)
                     ctx.risk_fired_at.pop(pod_key, None)
+                    ctx.risk_below_streak.pop(pod_key, None)
                     ctx.last_resolve_at[pod_key] = now_ts
-                if ctx.notifier is not None and resolved_score and long_enough:
+                if ctx.notifier is not None and resolved:
                     try:
                         ctx.notifier.notify(
                             alert_type="plan",

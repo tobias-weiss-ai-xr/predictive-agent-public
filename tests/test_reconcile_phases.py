@@ -100,6 +100,7 @@ def _build_ctx(state_model=None, predictor=None, remediation_manager=None,
         risk_firing=set(),
         risk_fired_at={},
         last_resolve_at={},
+        risk_below_streak={},
         last_plan_notify={},
         last_autonomy_notify={},
         **merged,
@@ -1454,7 +1455,10 @@ def test_evaluate_pods_resolves_alert_on_recovery(monkeypatch):
     # Healthy risk (~0.15) drops below the raised threshold: pod recovered.
     ctx.predictor.risk_threshold = 0.9
     clock.advance(config.RESOLVE_MIN_FIRING_S + 10)
-    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    # Sustained dwell: RESOLVE_DWELL_CYCLES consecutive below-cutoff cycles.
+    for c in range(config.RESOLVE_DWELL_CYCLES):
+        clock.advance(60)
+        phases.evaluate_pods(ctx, 2 + c, "kubernetes", [_healthy_pod()], {}, {}, set())
     resolved = _resolved_calls(ctx.notifier)
     assert len(resolved) == 1
     assert resolved[0].kwargs["pod_name"] == "default/p1"
@@ -1568,7 +1572,9 @@ def test_re_fire_within_cooldown_is_suppressed(monkeypatch):
     ctx.notifier.reset_mock()
     ctx.predictor.risk_threshold = 0.9
     clock.advance(config.RESOLVE_MIN_FIRING_S + 10)
-    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    for c in range(config.RESOLVE_DWELL_CYCLES):
+        clock.advance(60)
+        phases.evaluate_pods(ctx, 2 + c, "kubernetes", [_healthy_pod()], {}, {}, set())
     assert len(_resolved_calls(ctx.notifier)) == 1
     # Re-fire immediately: threshold back to 0.0, within cooldown.
     ctx.notifier.reset_mock()
@@ -1576,8 +1582,8 @@ def test_re_fire_within_cooldown_is_suppressed(monkeypatch):
     clock.advance(5)
     phases.evaluate_pods(ctx, 3, "kubernetes", [_healthy_pod()], {}, {}, set())
     assert _plan_calls(ctx.notifier) == [], "re-fire in cooldown must be silent"
-    assert "default/p1" in ctx.risk_firing
-    assert "default/p1" in ctx.risk_fired_at
+    assert "default/p1" not in ctx.risk_firing, "cooldown jitter must not re-open incident"
+    assert "default/p1" not in ctx.risk_fired_at
 
 
 def test_re_fire_after_cooldown_alerts_again(monkeypatch):
@@ -1590,10 +1596,88 @@ def test_re_fire_after_cooldown_alerts_again(monkeypatch):
     ctx.notifier.reset_mock()
     ctx.predictor.risk_threshold = 0.9
     clock.advance(config.RESOLVE_MIN_FIRING_S + 10)
-    phases.evaluate_pods(ctx, 2, "kubernetes", [_healthy_pod()], {}, {}, set())
+    for c in range(config.RESOLVE_DWELL_CYCLES):
+        clock.advance(60)
+        phases.evaluate_pods(ctx, 2 + c, "kubernetes", [_healthy_pod()], {}, {}, set())
     ctx.notifier.reset_mock()
     ctx.predictor.risk_threshold = 0.0
     clock.advance(config.RESOLVE_COOLDOWN_S + 10)
     phases.evaluate_pods(ctx, 3, "kubernetes", [_healthy_pod()], {}, {}, set())
     assert _plan_calls(ctx.notifier), "re-fire after cooldown should alert"
     assert "default/p1" in ctx.risk_firing
+
+
+class _OscillatingPredictor:
+    """Alternates just above/below the threshold — the live flapping pattern."""
+    def __init__(self, high=0.31, low=0.22, threshold=0.30):
+        self.high = high
+        self.low = low
+        self.risk_threshold = threshold
+        self.calls = 0
+
+    def predict(self, **kwargs):
+        from predictive_agent.predictor import PredictionResult
+        self.calls += 1
+        score = self.high if self.calls % 2 == 1 else self.low
+        return PredictionResult(
+            pod_key=kwargs.get("pod_key", "default/p1"),
+            risk_score=score, ttf_minutes=999, confidence=0.5,
+            markov_state="HEALTHY", memory_trend=0.0, cpu_trend=0.0,
+            memory_pct=30.0, cpu_pct=20.0,
+        )
+
+
+def test_oscillation_does_not_spam_resolves(monkeypatch):
+    """A pod alternating 0.31/0.22 must not resolve on every low cycle:
+    that is exactly the Matrix flood we observed."""
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
+    ctx = _risk_cheap_ctx(_OscillatingPredictor())
+    for c in range(8):
+        clock.advance(60)
+        phases.evaluate_pods(ctx, c + 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _resolved_calls(ctx.notifier) == [], "oscillation must not spam resolves"
+    assert len(_plan_calls(ctx.notifier)) <= 2, "firing alert throttled, not per-cycle"
+
+
+class _NamespaceAlertFeed:
+    """Simulates AlertWatch: namespace-wide +0.15 boost (live ALERT_FEED_RISK_BOOST)."""
+    def pod_boost(self, namespace, pod_name=""):
+        return 0.15
+
+
+class _LowRiskPredictor:
+    def __init__(self, risk_score=0.17, threshold=0.30):
+        self.risk_score = risk_score
+        self.risk_threshold = threshold
+
+    def predict(self, **kwargs):
+        from predictive_agent.predictor import PredictionResult
+        return PredictionResult(
+            pod_key=kwargs.get("pod_key", "default/p1"),
+            risk_score=self.risk_score, ttf_minutes=999, confidence=0.5,
+            markov_state="HEALTHY", memory_trend=0.0, cpu_trend=0.0,
+            memory_pct=30.0, cpu_pct=20.0,
+        )
+
+
+def test_namespace_feed_boost_does_not_create_incidents(monkeypatch):
+    """A namespace-wide alert boost must not fabricate per-pod fire/resolve
+    messages: in the live cluster every pod in an alerting namespace got
+    +0.15 and produced a mass resolve stream."""
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
+    ctx = _build_ctx(
+        state_model=StateModel(),
+        predictor=_LowRiskPredictor(),
+        notifier=MagicMock(),
+        remediation_manager=FakeRemediationManager(),
+        policy_engine=MockPolicy(),
+        alert_feed=_NamespaceAlertFeed(),
+    )
+    for c in range(6):
+        clock.advance(60)
+        phases.evaluate_pods(ctx, c + 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _plan_calls(ctx.notifier) == [], "feed-only boost must not fire a plan alert"
+    assert _resolved_calls(ctx.notifier) == [], "feed-only boost must not resolve"
+    assert "default/p1" not in ctx.risk_firing
