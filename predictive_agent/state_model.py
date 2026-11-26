@@ -165,6 +165,10 @@ class PodTracker:
         self.seasonal_cpu_conf = 0.0
         self.seasonal_mem_vel = 0.0
         self.seasonal_cpu_vel = 0.0
+        # Warm-up progress (0..1) so a not-yet-fitted model is visibly
+        # "warming up" rather than an unexplained confidence of 0.00.
+        self.seasonal_mem_progress = 0.0
+        self.seasonal_cpu_progress = 0.0
         self.memory_pct = 0.0
         self.cpu_pct = 0.0
         self.memory_mib = 0
@@ -227,6 +231,8 @@ class PodTracker:
             self.seasonal_cpu_conf = self.seasonal_cpu.confidence
             self.seasonal_mem_vel = self.seasonal_memory.expected_velocity()
             self.seasonal_cpu_vel = self.seasonal_cpu.expected_velocity()
+            self.seasonal_mem_progress = self.seasonal_memory.warmup_progress
+            self.seasonal_cpu_progress = self.seasonal_cpu.warmup_progress
 
         # Anomaly detection: 3-sigma innovation check
         self.memory_anomaly_score = self.kalman_memory.anomaly_score(memory_mib)
@@ -417,6 +423,10 @@ class StateModel:
                     "cpu_conf": pod.seasonal_cpu_conf,
                     "mem_vel": pod.seasonal_mem_vel,
                     "cpu_vel": pod.seasonal_cpu_vel,
+                    # Warm-up fraction (0..1). 0.0 with a fresh pod means
+                    # "collecting samples", not "seasonality absent".
+                    "mem_progress": pod.seasonal_mem_progress,
+                    "cpu_progress": pod.seasonal_cpu_progress,
                 } if pod.seasonal_mode != "off" else None,
                 "created_at": pod._created_at.isoformat() if pod._created_at else None,
             } for key, pod in self.pods.items()},

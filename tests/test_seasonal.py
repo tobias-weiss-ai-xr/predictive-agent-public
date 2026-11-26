@@ -149,3 +149,29 @@ def test_level_stays_at_dc_not_absorbed_by_seasonality():
     assert 300.0 < amp < 380.0, f"seasonal amplitude {amp:.1f} was absorbed into level"
     assert hw.confidence > 0.7, f"conf {hw.confidence:.2f}"
     assert hw.rolling_mae() < 10.0, f"mae {hw.rolling_mae():.1f} too high on clean signal"
+
+
+def test_reports_warmup_progress_before_fit():
+    """Before enough samples exist, the model must be able to say HOW FAR
+    along the warm-up it is. Live all-zero conf looked like a bug; the real
+    cause is 30h of required samples (1440 + 360) that a restart resets."""
+    hw = HoltWinters(season_len=48, sample_interval=60.0)
+    assert hw.samples_seen == 0
+    assert hw.samples_required == 48 + max(1, 48 // 4)
+    assert hw.warmup_progress == 0.0
+    for i in range(12):
+        hw.observe(1000.0 + i * 60, 100.0 + i)
+    assert hw.samples_seen == 12
+    assert 0.0 < hw.warmup_progress < 1.0
+    assert not hw.fitted
+    assert hw.confidence == 0.0
+
+
+def test_warmup_progress_reaches_one_when_fitted():
+    hw = HoltWinters(season_len=48, sample_interval=60.0)
+    need = hw.samples_required
+    for i in range(need):
+        hw.observe(1000.0 + i * 60, 100.0 + 20.0 * (i % 12))
+    assert hw.fitted
+    assert hw.samples_seen >= need
+    assert hw.warmup_progress >= 1.0

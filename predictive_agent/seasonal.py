@@ -185,6 +185,30 @@ class HoltWinters:
     def fitted(self) -> bool:
         return self._fitted
 
+    # ── Warm-up observability ─────────────────────────────────────────────
+    # A fit needs one full period plus a quarter-period of profiles. At the
+    # default 60s cadence / 1440 buckets that is ~30h of uninterrupted
+    # samples, so a fresh operator reports confidence 0.0 for a long time.
+    # Exposing progress makes that an explainable "warming up" instead of a
+    # silent 0.00 that reads like a bug.
+    @property
+    def samples_required(self) -> int:
+        """Samples needed before the first fit."""
+        return self.season_len + max(1, self.season_len // 4)
+
+    @property
+    def samples_seen(self) -> int:
+        """Samples currently buffered toward the fit window."""
+        return len(self._samples)
+
+    @property
+    def warmup_progress(self) -> float:
+        """0..1 fraction of the required samples collected (1.0 when fitted)."""
+        need = self.samples_required
+        if not need:
+            return 1.0
+        return min(1.0, len(self._samples) / float(need))
+
     @property
     def confidence(self) -> float:
         """0..1 — how much to trust the seasonal signal.
