@@ -105,6 +105,36 @@ class StateStore:
             except (json.JSONDecodeError, OSError, ValueError):
                 return None
 
+    def _seasonal_file(self):
+        """Path for the persisted Holt-Winters warm-up/fitted state.
+
+        Kept out of state-model.json because that file is rewritten every
+        reconcile cycle while this blob is much larger and only needs a slow
+        cadence; a daily fit needs ~30h of samples, so losing it to a
+        redeploy means the daily seasonal model can never warm up.
+        """
+        directory = os.path.dirname(self.state_model_file)
+        return os.path.join(directory, "seasonal-state.json")
+
+    def save_seasonal(self, data):
+        """Persist seasonal model state (atomic write)."""
+        with self._lock:
+            self._ensure_dir(self._seasonal_file())
+            self._atomic_write(self._seasonal_file(), data)
+
+    def load_seasonal(self):
+        """Load seasonal model state; return {} if missing/corrupt/not a dict."""
+        path = self._seasonal_file()
+        with self._lock:
+            if not os.path.exists(path):
+                return {}
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError, ValueError):
+                return {}
+            return data if isinstance(data, dict) else {}
+
     @staticmethod
     def _ensure_dir(path):
         """Create the parent directory of ``path`` if it does not exist."""

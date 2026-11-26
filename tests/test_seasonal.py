@@ -175,3 +175,96 @@ def test_warmup_progress_reaches_one_when_fitted():
     assert hw.fitted
     assert hw.samples_seen >= need
     assert hw.warmup_progress >= 1.0
+
+
+# ── Persistence: warm-up must survive an operator restart ───────────────────
+# A daily fit needs season_len + season_len/4 samples (~30h at a 60s
+# cadence). Seasonal buffers are in-memory, so before this every redeploy
+# restarted the clock and the daily model could never fit in a cluster
+# that ships regularly.
+
+
+def test_to_dict_round_trip_preserves_fitted_state():
+    series = _daily_series(days=3, period=24)
+    hw = HoltWinters(season_len=24)
+    for ts, v in series:
+        hw.observe(ts, v)
+    assert hw.fitted
+
+    restored = HoltWinters.from_dict(hw.to_dict())
+    assert restored.fitted
+    assert restored.season_len == hw.season_len
+    assert restored.level == pytest.approx(hw.level, rel=1e-6)
+    assert restored.trend == pytest.approx(hw.trend)
+    assert restored.last_ts == pytest.approx(hw.last_ts)
+    # The profile is persisted rounded to 4 decimals (compact blob), so
+    # compare with a tolerance rather than exactly.
+    assert restored.season == pytest.approx(hw.season, abs=1e-3)
+    # Same expected velocity as the model it was serialized from.
+    ts_last = series[-1][0] + 60.0
+    # Velocity derives from the rounded profile, so allow the same 4-dp
+    # quantization (values here are ~5 units/sample).
+    assert restored.expected_velocity(ts_last) == pytest.approx(
+        hw.expected_velocity(ts_last), abs=1e-3
+    )
+
+
+def test_warmup_continuity_across_restart():
+    """Half the warm-up, serialize, restore, keep observing -> still fits.
+
+    This is the actual production failure: 30h of warm-up reset to zero by
+    a redeploy.
+    """
+    period = 24
+    series = _daily_series(days=3, period=period)
+    need = period + max(1, period // 4)  # samples_required
+
+    first = HoltWinters(season_len=period)
+    for ts, v in series[: need // 2]:
+        first.observe(ts, v)
+    assert not first.fitted
+    assert first.samples_seen == need // 2
+
+    second = HoltWinters.from_dict(first.to_dict())
+    assert second.samples_seen == need // 2, "warm-up progress must carry over"
+
+    for ts, v in series[need // 2:]:
+        second.observe(ts, v)
+    assert second.fitted, "restored warm-up must reach a fit"
+    assert second.confidence > 0.5
+    assert second.season_len == period
+
+
+def test_unfitted_model_round_trips_without_lying():
+    hw = HoltWinters(season_len=24)
+    for i in range(5):
+        hw.observe(1000.0 + i * 60, 100.0 + i)
+    restored = HoltWinters.from_dict(hw.to_dict())
+    assert not restored.fitted
+    assert restored.samples_seen == 5
+    assert restored.level is None
+    assert restored.season is None
+    assert restored.confidence == 0.0
+
+
+def test_from_dict_rejects_mismatched_or_garbage_payloads():
+    assert HoltWinters.from_dict({}) is not None  # fresh model, no crash
+    assert HoltWinters.from_dict({"series": [], "meta": {}}).fitted is False
+    # A truncated/garbage payload must never raise into the reconcile loop.
+    assert HoltWinters.from_dict({"ts": "nope", "vals": None}) is not None
+
+
+def test_to_dict_payload_is_compact():
+    """The persisted blob is rewritten periodically on a 2Gi PVC, so it must
+    stay small: flat rounded arrays, not nested float pairs."""
+    period = 24
+    hw = HoltWinters(season_len=period)
+    for ts, v in _daily_series(days=3, period=period):
+        hw.observe(ts, v)
+    payload = hw.to_dict()
+    assert isinstance(payload["ts"], list) and isinstance(payload["vals"], list)
+    assert len(payload["ts"]) == len(payload["vals"]) == hw.samples_seen
+    import json as _json
+    blob = _json.dumps(payload)
+    # <= ~12 bytes per sample: ints + 3-decimal floats
+    assert len(blob) < 14 * hw.samples_seen + 2000, len(blob)

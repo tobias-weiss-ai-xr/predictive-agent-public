@@ -330,3 +330,73 @@ class TestSeasonalTrend:
         d = t.__dict__
         assert "seasonal_mode" in d
         assert "seasonal_mem_conf" in d
+
+
+# ── Seasonal persistence plumbing ───────────────────────────────────────────
+# The tracker owns two HoltWinters models. Their buffers must survive a
+# restart, otherwise a ~30h daily warm-up is reset by every redeploy.
+
+def test_tracker_seasonal_roundtrip_and_restore():
+    from predictive_agent.state_model import PodTracker
+    src = PodTracker("ns", "p1", seasonal_mode="shadow", seasonal_period=24)
+    for i in range(60):
+        src.update(memory_mib=100.0 + (i % 24), memory_limit_mib=1000,
+                   cpu_m=50.0 + (i % 12), restart_count=0, log_errors=0,
+                   node_pressure=False)
+    assert src.seasonal_cpu.samples_seen > 0
+    blob = src.seasonal_to_dict()
+    assert blob["mem"]["ts"] and blob["cpu"]["ts"]
+
+    dst = PodTracker("ns", "p1", seasonal_mode="shadow", seasonal_period=24)
+    assert dst.seasonal_cpu.samples_seen == 0
+    dst.restore_seasonal(blob)
+    assert dst.seasonal_cpu.samples_seen == src.seasonal_cpu.samples_seen
+    assert dst.seasonal_memory.samples_seen == src.seasonal_memory.samples_seen
+
+
+def test_track_pod_restores_seasonal_once_and_drops_it():
+    from predictive_agent.seasonal import HoltWinters
+    from predictive_agent.state_model import StateModel
+    hw = HoltWinters()  # default period, matching PodTracker's own
+    for i in range(30):
+        hw.observe(1000.0 + i * 60, 100.0)
+    model = StateModel()
+    model.seasonal_restore = {
+        "ns/p1": {"mem": hw.to_dict(), "cpu": hw.to_dict()},
+        "ns/gone": {"mem": hw.to_dict(), "cpu": hw.to_dict()},
+    }
+    tracker = model.track_pod("ns", "p1")
+    assert tracker.seasonal_cpu.samples_seen == hw.samples_seen
+    # Consumed: a later re-track of a fresh pod must not inherit stale state.
+    del model.pods["ns/p1"]
+    again = model.track_pod("ns", "p1")
+    assert again.seasonal_cpu.samples_seen == 0
+
+
+def test_track_pod_without_restore_payload_is_a_noop():
+    from predictive_agent.state_model import StateModel
+    model = StateModel()
+    tracker = model.track_pod("ns", "p2")
+    assert tracker.seasonal_cpu.samples_seen == 0
+
+
+def test_restore_seasonal_ignores_garbage():
+    from predictive_agent.state_model import PodTracker
+    t = PodTracker("ns", "p3", seasonal_mode="shadow", seasonal_period=24)
+    t.restore_seasonal({"mem": "nonsense", "cpu": None})
+    t.restore_seasonal({})
+    assert t.seasonal_cpu.samples_seen == 0
+
+
+def test_restore_seasonal_discards_buffer_when_period_changed():
+    """A buffer built for a different season_len must be dropped, not
+    re-interpreted: the ts->bucket mapping changes with the period."""
+    from predictive_agent.seasonal import HoltWinters
+    from predictive_agent.state_model import PodTracker
+    old = HoltWinters(season_len=24)
+    for i in range(30):
+        old.observe(1000.0 + i * 60, 100.0)
+    t = PodTracker("ns", "p4", seasonal_mode="shadow", seasonal_period=1440)
+    t.restore_seasonal({"mem": old.to_dict(), "cpu": old.to_dict()})
+    assert t.seasonal_cpu.samples_seen == 0, "period mismatch must not restore"
+    assert t.seasonal_cpu.season_len == 1440

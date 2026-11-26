@@ -299,6 +299,8 @@ def reconcile() -> Dict[str, Any]:
 
     # ─── Persist state ─────────────────────────────────────────────────
     _state_saves = phases.persist_state(ctx, _state_saves)
+    # Seasonal warm-up survives redeploys (slow cadence, separate file).
+    phases._persist_seasonal(ctx, cycle)
 
     # ─── Record predictions for backtesting ───────────────────────────
     phases.record_backtest_predictions(ctx)

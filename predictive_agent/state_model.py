@@ -1,5 +1,6 @@
 """Pod state tracking with Kalman filters and state classification."""
 
+import logging
 import os
 import threading
 import time
@@ -8,6 +9,8 @@ from datetime import datetime, timezone
 from predictive_agent.kalman import KalmanTrend
 from predictive_agent.markov import MarkovChain
 from predictive_agent.seasonal import HoltWinters
+
+logger = logging.getLogger(__name__)
 
 # Per-metric Kalman parameters (configurable via environment)
 # Memory changes gradually — low process noise, moderate measurement noise
@@ -199,6 +202,39 @@ class PodTracker:
         self.cpu_anomaly_score = 0.0
         self._created_at = None  # set on first update
 
+    def seasonal_to_dict(self) -> dict:
+        """Serialize both seasonal models so warm-up survives a restart."""
+        return {"mem": self.seasonal_memory.to_dict(),
+                "cpu": self.seasonal_cpu.to_dict()}
+
+    def restore_seasonal(self, payload) -> None:
+        """Restore persisted seasonal models. Never raises: a corrupt blob
+        leaves the freshly constructed (empty) models untouched.
+
+        The persisted buffer is only usable if it was built for the same
+        season_len: the wall-clock -> bucket mapping depends on the period, so
+        restoring samples into a differently sized profile would silently
+        mis-align every bucket. On a mismatch we start fresh instead.
+        """
+        if not isinstance(payload, dict):
+            return
+
+        def _adopt(current, blob):
+            if not isinstance(blob, dict):
+                return current
+            try:
+                if int(blob.get("season_len", current.season_len)) != current.season_len:
+                    logger.info(
+                        "Discarding persisted seasonal state: period changed "
+                        "(%s -> %s)", blob.get("season_len"), current.season_len)
+                    return current
+                return HoltWinters.from_dict(blob, season_len=current.season_len)
+            except (TypeError, ValueError):
+                return current
+
+        self.seasonal_memory = _adopt(self.seasonal_memory, payload.get("mem"))
+        self.seasonal_cpu = _adopt(self.seasonal_cpu, payload.get("cpu"))
+
     def update(self, memory_mib, memory_limit_mib, cpu_m, restart_count, log_errors, node_pressure, node_disk_pressure=False, cpu_limit_m=1000):
         """Update pod metrics and Kalman filters.
 
@@ -343,14 +379,23 @@ class StateModel:
     def __init__(self):
         self.pods = {}
         self.markov = MarkovChain()
+        # pod_key -> {"mem": <HoltWinters dict>, "cpu": <...>} loaded from
+        # disk at boot and consumed once per pod when its tracker is created.
+        # Seasonal warm-up is ~30h at a daily period, so it must survive a
+        # redeploy or the daily model can never fit.
+        self.seasonal_restore = {}
         self._lock = threading.Lock()
 
     def track_pod(self, namespace, name):
-        """Start tracking a pod."""
+        """Start tracking a pod, restoring persisted seasonal state if any."""
         pod_key = f"{namespace}/{name}"
         with self._lock:
             if pod_key not in self.pods:
-                self.pods[pod_key] = PodTracker(namespace, name)
+                tracker = PodTracker(namespace, name)
+                payload = self.seasonal_restore.pop(pod_key, None)
+                if payload:
+                    tracker.restore_seasonal(payload)
+                self.pods[pod_key] = tracker
             return self.pods[pod_key]
 
     def get_pods_snapshot(self):

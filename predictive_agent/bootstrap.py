@@ -69,6 +69,16 @@ def initialize_components(runtime: str, hooks: BootstrapHooks) -> ComponentSet:
     # Load persisted state
     try:
         state_model.markov = state_store.load_markov()
+        # Seasonal warm-up is ~30h at a daily period; hand the persisted
+        # buffers to the state model so each tracker restores them when it is
+        # first created (track_pod consumes the entry).
+        try:
+            state_model.seasonal_restore = state_store.load_seasonal()
+            if state_model.seasonal_restore:
+                logger.info(
+                    "Restored seasonal state for %d pods", len(state_model.seasonal_restore))
+        except Exception as e:  # noqa: BLE001 - must not block startup
+            logger.warning("Could not restore seasonal state: %s", e)
         logger.info("Loaded Markov chain state from %s", config.STATE_MODEL_FILE)
     except Exception as e:  # noqa: BLE001 - missing/corrupt state must not abort startup
         logger.warning("Could not load Markov state: %s", e)

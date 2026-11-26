@@ -35,7 +35,7 @@ from typing import Any, Callable, Dict, Optional
 PROTOCOL_VERSION = "2025-06-18"
 
 SERVER_NAME = "predictive-agent"
-SERVER_VERSION = "4.1.14"
+SERVER_VERSION = "4.1.15"
 
 # JSON-RPC error codes (MCP reuses the JSON-RPC 2.0 error space).
 PARSE_ERROR = -32700

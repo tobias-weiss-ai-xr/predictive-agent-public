@@ -1263,6 +1263,36 @@ def apply_continual_learning(ctx: ReconcileContext, decay_counter: int) -> int:
 # ── Phase 6: persist state ──────────────────────────────────────────────────
 
 
+def _persist_seasonal(ctx: ReconcileContext, cycle: int) -> None:
+    """Persist seasonal warm-up/fitted state on a slow cadence.
+
+    A daily fit needs ~30h of samples, but the buffers live in memory, so a
+    redeploy used to reset the clock. Writing on every cycle would be wasteful
+    (the blob is far larger than state-model.json), hence SEASONAL_PERSIST_EVERY.
+    Only currently-tracked pods are written, so removed pods are evicted and
+    the file cannot grow without bound. Never raises.
+    """
+    if ctx.state_store is None:
+        return
+    if not getattr(config, "SEASONAL_PERSIST_ENABLED", False):
+        return
+    every = max(1, int(getattr(config, "SEASONAL_PERSIST_EVERY", 20)))
+    if cycle % every != 0:
+        return
+    try:
+        payload = {}
+        for pod_key, tracker in ctx.state_model.pods.items():
+            if getattr(tracker, "seasonal_mode", "off") == "off":
+                continue
+            try:
+                payload[pod_key] = tracker.seasonal_to_dict()
+            except Exception:  # noqa: BLE001 - one bad tracker must not lose all
+                continue
+        ctx.state_store.save_seasonal(payload)
+    except Exception as e:  # noqa: BLE001 - persistence must never break reconcile
+        logger.warning("Failed to persist seasonal state: %s", e)
+
+
 def persist_state(ctx: ReconcileContext, state_saves: int) -> int:
     """Persist Markov/decision/Q-table/prediction state.
 

@@ -77,6 +77,90 @@ class HoltWinters:
         # cannot produce an absurd trend.
         self._typical_step: float = 0.0
 
+    # ── Persistence ────────────────────────────────────────────────────────
+    # A daily fit needs ~30h of samples at the 60s cadence. Buffers are
+    # in-memory, so without serialization every operator redeploy restarted
+    # the warm-up and the daily model could never fit in a cluster that
+    # ships regularly. The blob is flat+rounded because it is rewritten
+    # periodically onto a small PVC.
+    def to_dict(self) -> dict:
+        """Serialize the model (sample buffer + fitted state) to a plain dict."""
+        return {
+            "season_len": self.season_len,
+            "sample_interval": self.sample_interval,
+            "fitted": self._fitted,
+            "t0": getattr(self, "_t0", None),
+            "level": self.level,
+            "trend": self.trend,
+            "season": [round(float(x), 4) for x in self.season] if self.season else None,
+            "errors": [round(float(x), 4) for x in self.errors],
+            "last_ts": self.last_ts,
+            "coverage": self.season_coverage,
+            "typical_step": self._typical_step,
+            # Flat parallel arrays: ints for ts (the cadence is >= 1s) and
+            # 3-decimal floats keep this ~12 bytes/sample in JSON.
+            "ts": [int(t) for t, _ in self._samples],
+            "vals": [round(float(v), 3) for _, v in self._samples],
+        }
+
+    @classmethod
+    def from_dict(cls, data, **overrides):
+        """Rebuild a model from :meth:`to_dict` output.
+
+        Never raises: a corrupt or foreign payload yields a fresh model, so a
+        bad PVC file can never take the reconcile loop down.
+        """
+        try:
+            data = dict(data or {})
+            overrides = dict(overrides or {})
+            # Explicit overrides win over the payload, but must be merged into
+            # a single argument set (passing season_len twice raises TypeError).
+            season_len = int(overrides.pop("season_len", data.get("season_len", 1440)))
+            sample_interval = float(
+                overrides.pop("sample_interval", data.get("sample_interval", 60.0)))
+            model = cls(season_len=season_len, sample_interval=sample_interval,
+                        **overrides)
+        except (TypeError, ValueError):
+            return cls()
+
+        try:
+            ts_list = list(data.get("ts") or [])
+            vals = list(data.get("vals") or [])
+            samples = []
+            for t, v in zip(ts_list, vals):
+                samples.append((float(t), float(v)))
+            if samples:
+                cap = model.season_len * 2
+                model._samples = samples[-cap:]
+        except (TypeError, ValueError):
+            model._samples = []
+
+        # Only trust a fitted state that is internally consistent; otherwise
+        # keep the restored samples and let the next observe() refit.
+        season = data.get("season")
+        try:
+            if (data.get("fitted") and isinstance(season, list)
+                    and len(season) == model.season_len
+                    and data.get("level") is not None):
+                model.season = [float(x) for x in season]
+                model.level = float(data["level"])
+                model.trend = float(data.get("trend") or 0.0)
+                model.last_ts = data.get("last_ts")
+                model.season_coverage = float(data.get("coverage") or 0.0)
+                model._typical_step = float(data.get("typical_step") or 0.0)
+                model.errors = deque(
+                    [float(x) for x in (data.get("errors") or [])],
+                    maxlen=model.season_len,
+                )
+                if data.get("t0") is not None:
+                    model._t0 = float(data["t0"])
+                elif model._samples:
+                    model._t0 = model._samples[0][0]
+                model._fitted = True
+        except (TypeError, ValueError):
+            model._fitted = False
+        return model
+
     # ── Fit ────────────────────────────────────────────────────────────────
     def _index(self, ts: float) -> int:
         """Map a wall-clock timestamp onto a seasonal bucket index."""

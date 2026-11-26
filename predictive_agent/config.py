@@ -161,6 +161,18 @@ RESOLVE_COOLDOWN_S = int(os.environ.get("RESOLVE_COOLDOWN_S", "300"))
 # closed. Oscillating pods around the boundary therefore do not emit a
 # 'resolved' every dip.
 RESOLVE_DWELL_CYCLES = int(os.environ.get("RESOLVE_DWELL_CYCLES", "3"))
+
+# ─── Seasonal state persistence ──────────────────────────────────────────
+# A daily Holt-Winters fit needs season_len + season_len/4 samples (~30h at
+# the 60s cadence). The buffers are in-memory, so without persistence every
+# operator redeploy reset the warm-up and the daily model could never fit in
+# a cluster that ships regularly. Written to seasonal-state.json on its own
+# (throttled) cadence, separate from state-model.json which is rewritten
+# every cycle.
+SEASONAL_PERSIST_ENABLED = os.environ.get(
+    "SEASONAL_PERSIST_ENABLED", "true"
+).lower() in ("true", "1", "yes")
+SEASONAL_PERSIST_EVERY = int(os.environ.get("SEASONAL_PERSIST_EVERY", "20"))
 REMEDIATION_PROTECTED_NS = os.environ.get(
     "REMEDIATION_PROTECTED_NS", "kube-system,predictive-agent"
 )
