@@ -96,6 +96,7 @@ _risk_firing: set = set()
 _risk_fired_at: dict[str, float] = {}
 _last_resolve_at: dict[str, float] = {}
 _risk_below_streak: dict[str, int] = {}
+_risk_notified: set = set()
 _llm_lock = threading.Lock()  # guards _llm_calls/_llm_errors counters
 
 
@@ -176,6 +177,7 @@ def _build_context() -> "phases.ReconcileContext":
         risk_fired_at=_risk_fired_at,
         last_resolve_at=_last_resolve_at,
         risk_below_streak=_risk_below_streak,
+        risk_notified=_risk_notified,
         last_plan_notify=_last_plan_notify,
         last_autonomy_notify=_last_autonomy_notify,
         alert_feed=_alert_feed,

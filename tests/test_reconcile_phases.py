@@ -101,6 +101,7 @@ def _build_ctx(state_model=None, predictor=None, remediation_manager=None,
         risk_fired_at={},
         last_resolve_at={},
         risk_below_streak={},
+        risk_notified=set(),
         last_plan_notify={},
         last_autonomy_notify={},
         **merged,
@@ -1681,3 +1682,82 @@ def test_namespace_feed_boost_does_not_create_incidents(monkeypatch):
     assert _plan_calls(ctx.notifier) == [], "feed-only boost must not fire a plan alert"
     assert _resolved_calls(ctx.notifier) == [], "feed-only boost must not resolve"
     assert "default/p1" not in ctx.risk_firing
+
+
+class _NoopPlanManager(FakeRemediationManager):
+    """Replacement remediation manager whose plan has all-'none' steps:
+    the fire branch never emits a plan notification for the incident."""
+    def plan_remediation(self, *a, **k):
+        return {"horizon": 1, "steps": [
+            {"action": "none", "rationale": "no intervention warranted"}]}
+
+
+def test_resolve_silent_when_fire_never_notified(monkeypatch):
+    """An incident whose fire produced no notification must close silently:
+    sending 'resolved' for an alert we never 'fired' is pure Matrix noise
+    (live: every RESOLVED in a 1h37m window had no preceding FIRING)."""
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
+    predictor = Predictor(risk_threshold=0.0)
+    notifier = MagicMock()
+    ctx = _build_ctx(state_model=StateModel(), predictor=predictor,
+                     notifier=notifier, remediation_manager=_NoopPlanManager(),
+                     policy_engine=MockPolicy())
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert "default/p1" in ctx.risk_firing
+    assert "default/p1" in ctx.risk_fired_at
+    assert _plan_calls(ctx.notifier) == [], "all-none plan must not fire a notification"
+    ctx.notifier.reset_mock()
+    # Recovery: dwell past the damping gates.
+    ctx.predictor.risk_threshold = 0.9
+    clock.advance(config.RESOLVE_MIN_FIRING_S + 10)
+    for c in range(config.RESOLVE_DWELL_CYCLES):
+        clock.advance(60)
+        phases.evaluate_pods(ctx, 2 + c, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert _resolved_calls(ctx.notifier) == [], (
+        "silent incident must close WITHOUT a resolved notification")
+    assert "default/p1" not in ctx.risk_firing
+    assert "default/p1" not in ctx.risk_fired_at
+
+
+def test_removed_pod_resolve_silent_when_fire_never_notified(monkeypatch):
+    """Removed-pod auto-resolve is also silent for a never-notified incident."""
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
+    predictor = Predictor(risk_threshold=0.0)
+    notifier = MagicMock()
+    ctx = _build_ctx(state_model=StateModel(), predictor=predictor,
+                     notifier=notifier, remediation_manager=_NoopPlanManager(),
+                     policy_engine=MockPolicy())
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert "default/p1" in ctx.risk_firing
+    assert _plan_calls(ctx.notifier) == []
+    ctx.notifier.reset_mock()
+    phases.prepare_state_model(ctx, 2, "HEALTHY", set(), [])
+    phases.evaluate_pods(ctx, 2, "kubernetes", [], {}, {}, set())
+    assert _resolved_calls(ctx.notifier) == [], (
+        "removed-pod resolve of a silent incident must not notify")
+    assert "default/p1" not in ctx.risk_firing
+
+
+def test_resolve_still_notifies_when_fire_was_notified(monkeypatch):
+    """Regression guard: a real (notified) incident must still send a
+    resolved notification, so operators see the full lifecycle."""
+    clock = _Clock()
+    monkeypatch.setattr(phases.time, "time", clock)
+    predictor = Predictor(risk_threshold=0.0)
+    ctx = _risk_cheap_ctx(predictor)  # default manager plans a 'restart'
+    phases.evaluate_pods(ctx, 1, "kubernetes", [_healthy_pod()], {}, {}, set())
+    assert "default/p1" in ctx.risk_firing
+    assert len(_plan_calls(ctx.notifier)) >= 1, "notified fire expected"
+    ctx.notifier.reset_mock()
+    ctx.predictor.risk_threshold = 0.9
+    clock.advance(config.RESOLVE_MIN_FIRING_S + 10)
+    for c in range(config.RESOLVE_DWELL_CYCLES):
+        clock.advance(60)
+        phases.evaluate_pods(ctx, 2 + c, "kubernetes", [_healthy_pod()], {}, {}, set())
+    resolved = _resolved_calls(ctx.notifier)
+    assert len(resolved) == 1
+    assert resolved[0].kwargs["pod_name"] == "default/p1"
+    assert "default/p1" not in ctx.risk_firing
+    assert "default/p1" not in ctx.risk_notified

@@ -95,6 +95,11 @@ class ReconcileContext:
     last_resolve_at: Dict[str, float]
     # Consecutive cycles a firing pod has been clearly below the threshold.
     risk_below_streak: Dict[str, int]
+    # pod_keys whose fire actually emitted a notification. A resolve should
+    # only *notify* for incidents we alerted on — closing a silent incident
+    # with a Matrix message is orphan noise (observed live: every RESOLVED
+    # in a 1h37m window had no preceding FIRING).
+    risk_notified: Set[str]
     last_plan_notify: Dict[str, Tuple[str, float]]
     last_autonomy_notify: Dict[str, Tuple[str, float]]
 
@@ -369,7 +374,10 @@ def prepare_state_model(
                 ctx.risk_fired_at.pop(pod_key, None)
                 ctx.risk_below_streak.pop(pod_key, None)
                 ctx.last_resolve_at[pod_key] = time.time()
-                if ctx.notifier is not None:
+                # Close silently if we never alerted on the pod (orphan guard).
+                notify_closed = pod_key in ctx.risk_notified
+                ctx.risk_notified.discard(pod_key)
+                if ctx.notifier is not None and notify_closed:
                     try:
                         ctx.notifier.notify(
                             alert_type="plan",
@@ -811,6 +819,9 @@ def evaluate_pods(
                                     ),
                                 )
                                 ctx.last_plan_notify[pod_key] = (sig, now_ts)
+                                # The incident lifecycle is now operator-visible:
+                                # a later resolve closes exactly this alert.
+                                ctx.risk_notified.add(pod_key)
                     except Exception:  # noqa: BLE001
                         pass
                 # Use WARNING for high risk, INFO for moderate risk to reduce log spam
@@ -1032,12 +1043,18 @@ def evaluate_pods(
                 fired_at = ctx.risk_fired_at.get(pod_key, now_ts)
                 long_enough = (now_ts - fired_at) >= config.RESOLVE_MIN_FIRING_S
                 resolved = streak >= config.RESOLVE_DWELL_CYCLES and long_enough
+                # Only close what we opened: an incident we never alerted on
+                # (fire plan notify skipped) closes its lifecycle silently —
+                # emitting a resolve for it is orphan Matrix noise.
+                was_notified = pod_key in ctx.risk_notified
                 if resolved:
                     ctx.risk_firing.discard(pod_key)
                     ctx.risk_fired_at.pop(pod_key, None)
                     ctx.risk_below_streak.pop(pod_key, None)
                     ctx.last_resolve_at[pod_key] = now_ts
-                if ctx.notifier is not None and resolved:
+                    ctx.risk_notified.discard(pod_key)
+                notify_closed = resolved and was_notified
+                if ctx.notifier is not None and notify_closed:
                     try:
                         ctx.notifier.notify(
                             alert_type="plan",
