@@ -11,6 +11,8 @@ endpoint) and as JSON (``/decision-metrics``).
 import logging
 from typing import List, Optional, Tuple
 
+from predictive_agent import config
+
 logger = logging.getLogger(__name__)
 
 # Each metric: (name_suffix, prometheus_type, help, value)
@@ -104,6 +106,16 @@ def collect_decision_metrics(
         "decision_layer_degraded", "gauge",
         "1 if the planner is in degraded (calibration-drift rollback) mode",
         1 if getattr(rm, "degraded", False) else 0,
+    ))
+    metrics.append((
+        "decision_layer_effective_risk_threshold", "gauge",
+        "Effective remediation risk threshold after A3 calibration (base if uncalibrated)",
+        round(getattr(rm, "effective_risk_threshold", config.REMEDIATION_RISK_THRESHOLD), 3),
+    ))
+    metrics.append((
+        "decision_layer_threshold_recalibrations", "gauge",
+        "Number of A3 threshold recalibration steps applied",
+        getattr(rm, "threshold_recalibrations", 0),
     ))
 
     monitor = getattr(rm, "calibration_monitor", None)

@@ -987,6 +987,7 @@ class TestGetStats:
         expected = {
             "total_actions", "successful_actions", "failed_actions",
             "dry_run_actions", "registered_actions", "risk_threshold",
+            "effective_risk_threshold", "threshold_recalibrations",
             "dry_run", "dedup_window",
             "deduped_actions", "outcomes", "verifications",
         }

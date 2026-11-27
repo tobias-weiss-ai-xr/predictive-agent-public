@@ -14,7 +14,7 @@ raise an operator alert until calibration recovers.
 """
 
 import threading
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 logger = __import__("logging").getLogger(__name__)
 
@@ -85,6 +85,57 @@ class CalibrationMonitor:
         if self.over_rate() > self.over_rate_alert:
             return True
         return False
+
+    def suggested_threshold(
+        self,
+        base: float = 0.7,
+        min_n: int = 50,
+        low: float = 0.35,
+        high: float = 0.85,
+        step: float = 0.05,
+    ) -> Optional[float]:
+        """Youden-optimal failure-prediction threshold implied by the window.
+
+        Grid-searches the prediction cut-off t that maximizes
+        J = TPR - FPR over the realized (predicted, actual) pairs. Among ties
+        the cut-off closest to ``base`` is chosen, so a fleet with no
+        evidence of miscalibration keeps the current threshold. Returns None
+        when fewer than ``min_n`` outcomes have been realized (cold start) —
+        callers must not adapt on sparse windows. The result is clamped to
+        ``[low, high]``.
+        """
+        pairs = self._window()
+        if len(pairs) < min_n:
+            return None
+        best_t: Optional[float] = None
+        best_j = -float("inf")
+        start = min(step, low)
+        n_steps = int(round((1.0 - start) / step))
+        for i in range(n_steps + 1):
+            t = round(start + i * step, 10)  # no float accumulation drift
+            tp = fp = fn = tn = 0
+            for p, a in pairs:
+                if p > t:
+                    if a:
+                        tp += 1
+                    else:
+                        fp += 1
+                else:
+                    if a:
+                        fn += 1
+                    else:
+                        tn += 1
+            tpr = tp / (tp + fn) if (tp + fn) else 0.0
+            fpr = fp / (fp + tn) if (fp + tn) else 0.0
+            j = tpr - fpr
+            tie = abs(j - best_j) <= 1e-12
+            if j > best_j + 1e-12 or (
+                tie and best_t is not None and abs(t - base) < abs(best_t - base)
+            ):
+                best_j, best_t = j, t
+        if best_t is None:
+            return base
+        return min(max(best_t, low), high)
 
     def status(self) -> str:
         if self.drift_detected():

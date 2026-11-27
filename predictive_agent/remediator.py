@@ -328,6 +328,11 @@ class RemediationManager:
     ):
         self.dry_run = dry_run
         self.risk_threshold = risk_threshold
+        # A3 adaptive threshold: ``risk_threshold`` is the immutable base; the
+        # effective gate is nudged toward the Youden-optimal cut-off implied by
+        # the calibration window once enough outcomes are realized.
+        self.effective_risk_threshold: float = risk_threshold
+        self.threshold_recalibrations = 0
         self.safety_policy = safety_policy or SafetyPolicy()
         self.actions: list[RemediationAction] = []
         self.audit_trail: list[RemediationResult] = []
@@ -806,11 +811,11 @@ class RemediationManager:
         # verified — verify must not be skipped just because risk dropped).
         self.verify_remediations(pod_state)
 
-        if risk_score < self.risk_threshold:
+        if risk_score < self.effective_risk_threshold:
             logger.debug(
                 "Risk score %.1f below threshold %.1f — skipping remediation",
                 risk_score,
-                self.risk_threshold,
+                self.effective_risk_threshold,
             )
             return results
 
@@ -969,6 +974,42 @@ class RemediationManager:
 
         return results
 
+    def recalibrate_threshold(self) -> float:
+        """A3: nudge the effective risk threshold toward the Youden-optimal one.
+
+        Uses the calibration window's realized (predicted, actual) outcomes
+        (fed by A1 inaction learning and by action verification). No-op when
+        the feature is disabled, the monitor is missing/unfitted, or fewer than
+        ``THRESHOLD_CALIBRATION_MIN_SAMPLES`` outcomes have been realized.
+        Movement is EMA-smoothed (halved per call) and clamped to the
+        configured band, so a single noisy window cannot yank the threshold.
+        """
+        if not config.THRESHOLD_CALIBRATION_ENABLED:
+            return self.effective_risk_threshold
+        mon = self.calibration_monitor
+        suggest = getattr(mon, "suggested_threshold", None)
+        if suggest is None:
+            return self.effective_risk_threshold
+        suggestion = suggest(
+            base=self.risk_threshold,
+            min_n=config.THRESHOLD_CALIBRATION_MIN_SAMPLES,
+            low=config.THRESHOLD_CALIBRATION_MIN,
+            high=config.THRESHOLD_CALIBRATION_MAX,
+            step=config.THRESHOLD_CALIBRATION_STEP,
+        )
+        if suggestion is None:
+            return self.effective_risk_threshold
+        cur = self.effective_risk_threshold
+        if abs(suggestion - cur) <= config.THRESHOLD_CALIBRATION_STEP:
+            nxt = suggestion
+        else:
+            nxt = cur + (suggestion - cur) * 0.5
+        nxt = min(max(nxt, config.THRESHOLD_CALIBRATION_MIN), config.THRESHOLD_CALIBRATION_MAX)
+        if abs(nxt - cur) >= 0.01:
+            self.effective_risk_threshold = round(nxt, 2)
+            self.threshold_recalibrations += 1
+        return self.effective_risk_threshold
+
     def plan_and_execute(
         self,
         current_state: str,
@@ -998,6 +1039,11 @@ class RemediationManager:
         """
         from predictive_agent import config
         from predictive_agent.pomdp import Planner
+
+        # A3: adapt the effective action threshold to observed calibration
+        # before gating (cheap grid over the rolling window; no-op on cold
+        # start or insufficient realized outcomes).
+        self.recalibrate_threshold()
 
         # Safety guardrail: confidence gate — never act when the model is unsure.
         if prediction is not None:
@@ -1068,7 +1114,7 @@ class RemediationManager:
         # reconcile loop escalates after CRASHLOOP_ESCALATE_AFTER such cycles.
         # Skip when the circuit breaker fully capped this cycle (max_actions=0),
         # where an empty result is an intentional suppression, not a 'none'.
-        if (not results and risk_score >= self.risk_threshold
+        if (not results and risk_score >= self.effective_risk_threshold
                 and (max_actions is None or max_actions > 0)):
             results.append(RemediationResult(
                 action="none",
@@ -1847,6 +1893,8 @@ class RemediationManager:
             "dry_run_actions": dry_run,
             "registered_actions": [a.name for a in self.actions],
             "risk_threshold": self.risk_threshold,
+            "effective_risk_threshold": self.effective_risk_threshold,
+            "threshold_recalibrations": self.threshold_recalibrations,
             "dry_run": self.dry_run,
             "dedup_window": self.dedup_window,
             "deduped_actions": self.deduped_count,

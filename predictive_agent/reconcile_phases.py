@@ -884,7 +884,10 @@ def evaluate_pods(
                             results = ctx.remediation_manager.evaluate(
                                 tracker, result, result.risk_score
                             )
-                        at_risk = result.risk_score >= config.REMEDIATION_RISK_THRESHOLD
+                        at_risk = result.risk_score >= (
+                            getattr(ctx.remediation_manager, "effective_risk_threshold", None)
+                            or config.REMEDIATION_RISK_THRESHOLD
+                        )
                         all_none = bool(
                             results
                             and all(getattr(r, "action", "none") == "none" for r in results)

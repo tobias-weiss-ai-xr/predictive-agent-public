@@ -143,6 +143,24 @@ REMEDIATION_COOLDOWN_S = os.environ.get("REMEDIATION_COOLDOWN_S", "300")
 REMEDIATION_DEDUP_WINDOW = int(os.environ.get("REMEDIATION_DEDUP_WINDOW", "300"))
 REMEDIATION_RISK_THRESHOLD = float(os.environ.get("REMEDIATION_RISK_THRESHOLD", "0.7"))
 
+# ─── Adaptive risk-threshold calibration (A3) ────────────────────────────
+# Once the calibration monitor has realized at least
+# THRESHOLD_CALIBRATION_MIN_SAMPLES (predicted, actual) outcomes — which A1's
+# inaction learning now supplies even when nothing was done — the effective
+# remediation risk threshold is nudged toward the Youden-optimal cut-off of
+# the window (rise when the model over-predicts failure, fall on
+# under-prediction), bounded and EMA-smoothed so it cannot oscillate.
+# The configured REMEDIATION_RISK_THRESHOLD stays the immutable base.
+THRESHOLD_CALIBRATION_ENABLED = os.environ.get(
+    "THRESHOLD_CALIBRATION_ENABLED", "true"
+).lower() in ("true", "1", "yes")
+THRESHOLD_CALIBRATION_MIN_SAMPLES = int(
+    os.environ.get("THRESHOLD_CALIBRATION_MIN_SAMPLES", "50")
+)
+THRESHOLD_CALIBRATION_STEP = float(os.environ.get("THRESHOLD_CALIBRATION_STEP", "0.05"))
+THRESHOLD_CALIBRATION_MIN = float(os.environ.get("THRESHOLD_CALIBRATION_MIN", "0.35"))
+THRESHOLD_CALIBRATION_MAX = float(os.environ.get("THRESHOLD_CALIBRATION_MAX", "0.85"))
+
 # ─── Risk alert lifecycle (auto-resolve damping) ──────────────────────────
 # The auto-resolve lifecycle closes a firing "plan" alert when a pod's score
 # drops. Pods hovering at the threshold flap fire/resolve every reconcile

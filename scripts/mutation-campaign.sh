@@ -80,7 +80,7 @@ run_campaign scoring 88 \
 
 run_campaign remediator 85 \
     "predictive_agent/remediator.py,predictive_agent/actions" \
-    "tests/test_remediator.py,tests/test_docker_remediation.py,tests/test_integration_remediation.py,tests/test_bounded_autonomy.py,tests/test_calibration_guardrails.py,tests/test_continual_learning.py,tests/test_crashloop_escalation.py,tests/test_mutation_harvest.py,tests/test_action_guards.py,tests/test_cost_model.py,tests/test_verify_after_act.py,tests/test_remediator_survivors.py,tests/test_dispatch_survivors.py,tests/test_remediator_plan_survivors.py,tests/test_remediator_string_survivors.py"
+    "tests/test_remediator.py,tests/test_docker_remediation.py,tests/test_integration_remediation.py,tests/test_bounded_autonomy.py,tests/test_calibration_guardrails.py,tests/test_continual_learning.py,tests/test_crashloop_escalation.py,tests/test_mutation_harvest.py,tests/test_action_guards.py,tests/test_cost_model.py,tests/test_verify_after_act.py,tests/test_remediator_survivors.py,tests/test_dispatch_survivors.py,tests/test_remediator_plan_survivors.py,tests/test_remediator_string_survivors.py,tests/test_threshold_calibration.py"
 
 run_campaign pomdp 92 \
     "predictive_agent/pomdp.py" \
