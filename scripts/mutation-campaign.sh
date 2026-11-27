@@ -7,7 +7,7 @@
 #
 # Output: mutation-report.json + exit 1 if a campaign's kill rate falls below
 # its floor. remediator floor tightened to 85 after the survivor-killer test
-# battery (2026-11-27 post-v4.1.0 re-measure: 85.9% = 2622/3053, 0 untested;
+# battery (2026-11-27 post-v4.1.0 re-measure: 90.0% = 2746/3053, 0 untested;
 # the 526-mutant no-tests spike ended once test_verify_after_act.py joined the
 # selection, leaving 440 real survivors in the bounded-autonomy paths); scoring
 # floor tightened to 85 after its survivor-killer battery + a real Kalman FP10

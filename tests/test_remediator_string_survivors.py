@@ -1773,3 +1773,307 @@ class TestApplyNamedActionGates:
         assert result.outcome == RemediationOutcome.CANARY.value
         assert mgr.context.audit_log[-1]["outcome"] == RemediationOutcome.CANARY.value
         assert mgr.interventions_executed == 0  # _apply path does not count
+
+
+# ── Exact logger messages (kills mutmut string-mutation survivors) ─────
+
+
+def _log_text(caplog) -> str:
+    return "\n".join(r.getMessage() for r in caplog.records)
+
+
+class TestExactLogMessages:
+    def test_register_action_log(self, caplog):
+        mgr = _manager()
+        with caplog.at_level("INFO", logger="predictive_agent.remediator"):
+            mgr.register_action(_PlainAction())
+        assert "Registered remediation action: plain_act" in _log_text(caplog)
+
+    def test_dedup_skip_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=300)
+        action = _PlainAction()
+        mgr.register_action(action)
+        key = "ns1/pod-1/plain_act/w300"
+        mgr._dedup_history[key] = {"timestamp": 900.0, "verify": "pending"}
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            with mock.patch.object(rem_mod, "_now", return_value=1000.0):
+                mgr._dedup_skip_result("ns1", "pod-1", action)
+        assert (
+            "[op] dedup: action already executed "
+            "(idempotency_key=ns1/pod-1/plain_act/w300, last run 100s ago)"
+        ) in _log_text(caplog)
+
+    def test_hold_skip_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=300)
+        action = _PlainAction()
+        key = "ns1/pod-1/plain_act/w300"
+        mgr._dedup_history[key] = {"verify": "held", "held_until": 3000.0}
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr._hold_skip(action, "pod-1", "ns1")
+        assert (
+            "Remediation decision: action=plain_act target=pod-1 outcome=held "
+            "reason=verification hold active (retry after approval or hold expiry)"
+        ) in _log_text(caplog)
+
+    def test_leg_dedup_skip_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=300)
+        action = _CanaryAction()
+        rec = {"timestamp": 900.0, "verify": "pending"}
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr._leg_dedup_skip(action, "pod-1", "ns1/pod-1/canary_act/w300/canary", rec)
+        assert (
+            "[op] dedup: action already executed (idempotency_key=ns1/pod-1/canary_act/w300/canary)"
+        ) in _log_text(caplog)
+
+    def test_verify_failure_held_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        with mock.patch.object(config, "VERIFY_HOLD_S", 60), \
+                mock.patch.object(config, "REMEDITATION_REVERT_ENABLED", False):
+            mgr = _manager()
+            action = _PlainAction()
+            key = "ns1/pod-1/plain_act/w300"
+            rec = {"verify": "pending"}
+            mgr._dedup_history[key] = rec
+            with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+                mgr._handle_verify_failure(action, "ns1", "pod-1", key, rec, {"state": True, "memory_pct": False})
+        assert (
+            "Remediation decision: action=plain_act target=pod-1 outcome=held "
+            "reason=verification failed (1/2 signals improved, criteria={'state': True, 'memory_pct': False})"
+        ) in _log_text(caplog)
+
+    def test_revert_success_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager()
+        action = _PlainAction()
+        rec: dict = {"snapshot": {}}
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr._execute_revert(action, "ns1", "pod-1", rec)
+        assert (
+            "Remediation decision: action=plain_act target=pod-1 outcome=reverted "
+            f"reason=verification failed after {config.VERIFY_SETTLING_S:.0f}s settling"
+        ) in _log_text(caplog)
+
+    def test_revert_none_log(self, clock, caplog):
+        mgr = _manager()
+
+        class _NullRevertLog(RemediationAction):
+            name = "null_log"
+            idempotent = True
+            reversible = True
+
+            def should_execute(self, p, pr, r):
+                return True
+
+            def execute(self, t, c):
+                return RemediationResult(action=self.name, target=t, success=True, dry_run=c.dry_run, message="x", command="x")
+
+            def revert(self, target, prev_state, context):
+                return None
+
+        action = _NullRevertLog()
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr._execute_revert(action, "ns1", "pod-1", {"snapshot": {}})
+        assert (
+            "Remediation decision: action=null_log target=pod-1 outcome=reverted "
+            "reason=revert() returned None \u2014 nothing to restore"
+        ) in _log_text(caplog)
+
+    def test_approval_required_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager()
+        action = _PlainAction()
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr._queue_retry_approval(action, "ns1", "pod-1", "k")
+        assert (
+            "Remediation decision: action=plain_act target=pod-1 outcome=approval_required "
+            "reason=verification failed on irreversible action "
+            "(approve ns1/pod-1/plain_act via POST /review)"
+        ) in _log_text(caplog)
+
+    def test_evaluate_should_execute_false_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager()
+        action = _IneligibleAction()
+        mgr.register_action(action)
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr.evaluate(_pod(state="CRITICAL", replicas=1), None, 0.9)
+        assert "reason=should_execute returned False" in _log_text(caplog)
+
+    def test_evaluate_safety_block_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager()
+        action = _PlainAction()
+        mgr.register_action(action)
+        mgr.safety_policy = SafetyPolicy(cooldown_seconds=3600, max_per_minute=0, max_per_hour=0)
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr.evaluate(_pod(state="CRITICAL", replicas=1), None, 0.9)
+        assert "reason=per-minute rate limit exceeded" in _log_text(caplog)
+
+    def test_evaluate_destructive_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager()
+        action = _DestructiveAction()
+        mgr.register_action(action)
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr.evaluate(_pod(state="CRITICAL", replicas=1), None, 0.9)
+        assert (
+            "Destructive remediation executing: action=destructive_act target=pod-1 ns=ns1 dry_run=True"
+        ) in _log_text(caplog)
+
+    def test_confidence_gate_log(self, caplog):
+        with mock.patch.object(config, "MIN_ACTION_CONFIDENCE", 0.7):
+            mgr = _manager()
+            with caplog.at_level("INFO", logger="predictive_agent.remediator"):
+                mgr.plan_and_execute(
+                    "CRITICAL", "pod-1", _pod(), SimpleNamespace(confidence=0.3),
+                    0.9, namespace="ns1", node_name="node-1",
+                )
+        assert (
+            "Confidence 0.30 below gate 0.70 \u2014 skipping planner action on pod-1"
+        ) in _log_text(caplog)
+
+    def test_model_support_fallback_log(self, caplog):
+        with mock.patch.object(config, "MIN_ACTION_CONFIDENCE", 0.0), \
+                mock.patch.object(config, "MIN_MODEL_SUPPORT", 0.5):
+            mgr = _manager()
+            mgr.decision_model = mock.MagicMock()
+            mgr.decision_model.is_confident.return_value = False
+            mgr.decision_model.state_support.return_value = 0.0
+            with caplog.at_level("INFO", logger="predictive_agent.remediator"):
+                mgr.plan_and_execute(
+                    "CRITICAL", "pod-1", _pod(), SimpleNamespace(confidence=1.0),
+                    0.9, namespace="ns1", node_name="node-1",
+                )
+        assert (
+            "Model support 0.0 below MIN_MODEL_SUPPORT 0.5 for pod-1 \u2014 "
+            "falling back to reactive remediation"
+        ) in _log_text(caplog)
+
+    def test_gate_reviews_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager(review_tier="moderate")
+        action = _DestructiveAction()
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr._gate_reviews(action, "pod-1", "ns1", 0.9)
+        assert (
+            "Remediation decision: action=destructive_act target=pod-1 outcome=review_required "
+            "reason=tier destructive >= REMEDIATION_REVIEW_TIER=moderate (approve via POST /review)"
+        ) in _log_text(caplog)
+
+    def test_approve_review_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager(review_tier="moderate", review_ttl_s=900)
+        action = _DestructiveAction()
+        mgr._gate_reviews(action, "pod-1", "ns1", 0.9)
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr.approve_review(signature="ns1/pod-1/destructive_act")
+        assert (
+            "[review] signature ns1/pod-1/destructive_act approved "
+            "(1 queued item(s) released; valid for 900s)"
+        ) in _log_text(caplog)
+
+    def test_timeout_log(self, caplog):
+        mgr = _manager(action_timeout_s=0.2)
+
+        class _SlowLog(RemediationAction):
+            name = "slow_log"
+            idempotent = True
+
+            def should_execute(self, p, pr, r):
+                return True
+
+            def execute(self, target, context):
+                time.sleep(0.4)
+                return RemediationResult(action=self.name, target=target, success=True, dry_run=True, message="x", command="x")
+
+        mgr.register_action(_SlowLog())
+        with caplog.at_level("ERROR", logger="predictive_agent.remediator"):
+            mgr._execute_with_timeout(_SlowLog(), "pod-1", SimpleNamespace(dry_run=True))
+        assert (
+            "[op] remediation timeout: action=slow_log target=pod-1 did not complete "
+            "within 0s \u2014 abandoning"
+        ) in _log_text(caplog)
+
+    def test_dispatch_widen_hold_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=300)
+        action = _CanaryAction()
+        mgr.register_action(action)
+        mgr._dedup_history[f"{mgr.idempotency_key('ns1', 'pod-1', action.name)}/widen"] = {
+            "timestamp": 900.0, "verify": "held", "held_until": 3000.0,
+        }
+        with caplog.at_level("INFO", logger="predictive_agent.remediator"):
+            mgr._dispatch_action(action, _pod(replicas=3), "pod-1", "ns1", "node-1", from_state="CRITICAL", risk_score=0.9)
+        assert (
+            "Remediation decision: action=canary_act target=pod-1 outcome=held "
+            "reason=widen verification hold active"
+        ) in _log_text(caplog)
+
+    def test_dispatch_canary_hold_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=300)
+        action = _CanaryAction()
+        mgr.register_action(action)
+        mgr._dedup_history[f"{mgr.idempotency_key('ns1', 'pod-1', action.name)}/canary"] = {
+            "timestamp": 900.0, "verify": "held", "held_until": 3000.0,
+        }
+        with caplog.at_level("INFO", logger="predictive_agent.remediator"):
+            mgr._dispatch_action(action, _pod(replicas=3), "pod-1", "ns1", "node-1", from_state="CRITICAL", risk_score=0.9)
+        assert (
+            "Remediation decision: action=canary_act target=pod-1 outcome=held "
+            "reason=canary verification hold active \u2014 widen blocked"
+        ) in _log_text(caplog)
+
+    def test_dispatch_deferred_log(self, clock, caplog):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=300)
+        action = _CanaryAction()
+        mgr.register_action(action)
+        mgr._dedup_history[f"{mgr.idempotency_key('ns1', 'pod-1', action.name)}/canary"] = {
+            "timestamp": 900.0, "verify": "pending", "recorded_at": 900.0,
+        }
+        with caplog.at_level("INFO", logger="predictive_agent.remediator"):
+            mgr._dispatch_action(action, _pod(replicas=3), "pod-1", "ns1", "node-1", from_state="CRITICAL", risk_score=0.9)
+        assert (
+            "Remediation decision: action=canary_act target=pod-1 outcome=held "
+            "reason=canary leg not yet verified \u2014 widen deferred"
+        ) in _log_text(caplog)
+
+    def test_apply_not_registered_log(self, caplog):
+        mgr = _manager()
+        with caplog.at_level("INFO", logger="predictive_agent.remediator"):
+            mgr._apply_named_action("ghost", "pod-1", _pod(), {}, 0.5, "ns1", "node-1")
+        assert "Planned action ghost not registered \u2014 skipping" in _log_text(caplog)
+
+    def test_apply_safety_skip_log(self, caplog):
+        mgr = _manager()
+        action = _PlainAction()
+        mgr.register_action(action)
+        mgr.safety_policy = SafetyPolicy(cooldown_seconds=3600, max_per_minute=0, max_per_hour=0)
+        with caplog.at_level("INFO", logger="predictive_agent.remediator"):
+            mgr._apply_named_action(action.name, "pod-1", _pod(), {}, 0.5, "ns1", "node-1")
+        assert "Planned action plain_act skipped: per-minute rate limit exceeded" in _log_text(caplog)
+
+    def test_apply_ineligible_log(self, caplog):
+        mgr = _manager()
+        action = _IneligibleAction()
+        mgr.register_action(action)
+        with caplog.at_level("INFO", logger="predictive_agent.remediator"):
+            mgr._apply_named_action(action.name, "pod-1", _pod(), {}, 0.5, "ns1", "node-1")
+        assert "Planned action ineligible_act not eligible (should_execute=False)" in _log_text(caplog)
+
+    def test_apply_destructive_log(self, caplog):
+        mgr = _manager()
+        action = _DestructiveAction()
+        mgr.register_action(action)
+        with caplog.at_level("WARNING", logger="predictive_agent.remediator"):
+            mgr._apply_named_action(
+                action.name, "pod-1", _pod(replicas=1, state="CRITICAL"), {}, 0.9,
+                "ns1", "node-1",
+            )
+        assert (
+            "Destructive remediation executing: action=destructive_act target=pod-1 ns=ns1 dry_run=True"
+        ) in _log_text(caplog)
