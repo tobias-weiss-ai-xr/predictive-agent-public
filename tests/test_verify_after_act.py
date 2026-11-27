@@ -173,7 +173,7 @@ class TestConfigKnobs:
         assert config.VERIFY_HOLD_S == 600.0
         assert config.VERIFY_ESCALATE_AFTER == 2
         assert config.CANARY_MAX_FRACTION == 0.15
-        assert config.REMEDITATION_REVERT_ENABLED is True
+        assert config.REMEDIATION_REVERT_ENABLED is True
 
     def test_knobs_readable_from_env(self):
         # The config layer reads the documented env overrides (same pattern the
@@ -494,7 +494,7 @@ class TestReversibility:
         assert action.revert_calls == 0
 
     def test_revert_disabled_degrades_to_hold(self, clock, monkeypatch):
-        monkeypatch.setattr(config, "REMEDITATION_REVERT_ENABLED", False)
+        monkeypatch.setattr(config, "REMEDIATION_REVERT_ENABLED", False)
         mgr = _manager()
         action = _FakeAction(reversible=True)
         mgr.register_action(action)

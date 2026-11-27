@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import time
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -795,7 +796,8 @@ def test_plan_and_execute_respects_should_execute():
     rem = RemediationManager(dry_run=False)
     rem.register_action(a)
     rem.decision_model = ActionAwareTransitionModel(base_chain=MarkovChain())
-    rem.plan_and_execute("CRITICAL", "ns/pod", _Pod("CRITICAL"), None, 0.95, horizon=3)
+    with mock.patch("predictive_agent.config.MIN_MODEL_SUPPORT", 0.0):
+        rem.plan_and_execute("CRITICAL", "ns/pod", _Pod("CRITICAL"), None, 0.95, horizon=3)
     assert a.executed, "planner should execute an eligible action"
 
     # Ineligible action must NOT be executed (safety gate).
@@ -803,9 +805,10 @@ def test_plan_and_execute_respects_should_execute():
     rem2 = RemediationManager(dry_run=False)
     rem2.register_action(b)
     rem2.decision_model = ActionAwareTransitionModel(base_chain=MarkovChain())
-    results = rem2.plan_and_execute(
-        "CRITICAL", "ns/pod", _Pod("CRITICAL"), None, 0.95, horizon=3
-    )
+    with mock.patch("predictive_agent.config.MIN_MODEL_SUPPORT", 0.0):
+        results = rem2.plan_and_execute(
+            "CRITICAL", "ns/pod", _Pod("CRITICAL"), None, 0.95, horizon=3
+        )
     assert not b.executed, "planner must not execute an ineligible action"
     assert any("ineligible" in r.message for r in results)
 

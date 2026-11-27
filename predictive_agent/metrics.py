@@ -19,6 +19,38 @@ Metric = Tuple[str, str, str, float]
 _PREFIX = "predictive_agent_"
 
 
+def collect_backtest_metrics(backtester) -> List[Metric]:
+    """Prometheus gauges for the backtest report (B4 observability).
+
+    Includes the positive-class footprint so a starved 0 TP / 0 FN confusion
+    matrix is not mistaken for perfect detection: ``backtest_positive_samples``
+    and ``backtest_failure_validated`` make "recall undefined" explicit.
+    """
+    if backtester is None:
+        return []
+    try:
+        report = backtester.evaluate()
+    except Exception:  # pragma: no cover - defensive; report must not break /metrics
+        logger.exception("Backtest evaluation failed during metric collection")
+        return []
+    prefix = "backtest_"
+    g = lambda name, help_text, value: (  # noqa: E731
+        prefix + name, "gauge", help_text, float(value)
+    )
+    return [
+        g("matched_pairs", "Matched prediction/outcome pairs", report.matched_pairs),
+        g("brier", "Brier score of P(FAILED) vs actual outcomes", report.brier_score),
+        g("true_positives", "Matched pairs that failed and were predicted", report.true_positives),
+        g("false_positives", "Matched pairs predicted to fail that did not", report.false_positives),
+        g("true_negatives", "Matched pairs correctly predicted healthy", report.true_negatives),
+        g("false_negatives", "Matched pairs that failed unpredicted", report.false_negatives),
+        g("positive_samples", "Matched pairs with an actual failure (TP+FN)", report.positive_samples),
+        g("positive_rate", "Share of matched pairs that actually failed", report.positive_rate),
+        g("failure_validated", "1 when >= MIN_POSITIVE_SAMPLES real failures were observed",
+          1 if report.validated_on_failures else 0),
+    ]
+
+
 def _learning_volume(rm) -> int:
     model = getattr(rm, "decision_model", None)
     counts = getattr(model, "action_counts", None)

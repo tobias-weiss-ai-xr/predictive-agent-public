@@ -654,7 +654,7 @@ class RemediationManager:
         kind = "remediation_held"
         reverted = False
         # Revert reversible actions automatically (best practice: armed rollback).
-        if config.REMEDITATION_REVERT_ENABLED and getattr(action, "reversible", False):
+        if config.REMEDIATION_REVERT_ENABLED and getattr(action, "reversible", False):
             revert_res = self._execute_revert(action, namespace, target, rec)
             if revert_res is not None:
                 reverted = True
@@ -1196,6 +1196,57 @@ class RemediationManager:
                 if self.rl_policy is not None:
                     self.rl_policy.update(from_state, action, observed_state)
             del self._pending_feedback[pod_key]
+
+    def note_inaction_outcome(
+        self,
+        target: str,
+        from_state: str,
+        to_state: str,
+        predicted_p_failed: Optional[float] = None,
+    ) -> bool:
+        """Learn an implicit "none" outcome from a natural incident.
+
+        Called by the reconcile loop when a pod worsens (HEALTHY/DEGRADED ->
+        CRITICAL/FAILED) while no action was executed. This is how the
+        decision model, calibration monitor and RL policy learn from
+        real incidents in an intervention-light steady state: before this,
+        ``record_observations`` only ever saw outcomes of executed actions, so
+        with zero interventions both the learning-transitions and calibration
+        counters stayed at 0 (A1).
+
+        Args:
+            target: Pod key (namespace/name) of the observed incident.
+            from_state: State the pod was in on the previous cycle.
+            to_state: State the pod resolved to (the worsening).
+            predicted_p_failed: Predictor's P(FAILED) at plan time, if any
+                (required for a calibration sample; the transition and RL
+                update are recorded regardless).
+
+        Returns:
+            True if an implicit outcome was recorded, False if the transition
+            was out of scope (no-op) or the feature is disabled.
+
+        Scope guard: only HEALTHY/DEGRADED -> CRITICAL/FAILED transitions are
+        learned. Equal states, milder worsening (-> DEGRADED) and transitions
+        out of terminal states (CRITICAL -> FAILED) are ignored so persistently
+        failing pods do not flood the model.
+        """
+        from predictive_agent import config
+
+        if not config.LEARN_FROM_INACTION:
+            return False
+        if from_state == to_state:
+            return False
+        if to_state not in ("CRITICAL", "FAILED"):
+            return False
+        if from_state not in ("HEALTHY", "DEGRADED"):
+            return False
+        self.feed_transition(from_state, "none", to_state)
+        if self.calibration_monitor is not None and predicted_p_failed is not None:
+            self.calibration_monitor.record(predicted_p_failed, True)
+        if self.rl_policy is not None:
+            self.rl_policy.update(from_state, "none", to_state)
+        return True
 
     def clear_pending(self, pod_key: str) -> None:
         """Drop pending feedback for a removed/unknown pod (no outcome observed)."""
@@ -1750,7 +1801,7 @@ class RemediationManager:
             "hold_s": config.VERIFY_HOLD_S,
             "escalate_after": config.VERIFY_ESCALATE_AFTER,
             "canary_max_fraction": config.CANARY_MAX_FRACTION,
-            "revert_enabled": bool(getattr(config, "REMEDITATION_REVERT_ENABLED", True)),
+            "revert_enabled": bool(getattr(config, "REMEDIATION_REVERT_ENABLED", True)),
             "entries": entries,
             "canary": dict(self._canary_state),
             "pending_outcome_alerts": len(self.outcome_alerts),

@@ -950,6 +950,33 @@ def evaluate_pods(
                                                          float(result.risk_score)))
                     except Exception as e:  # noqa: BLE001
                         logger.error("Remediation evaluation failed for %s: %s", pod_key, e)
+                    # A1 natural-incident learning: a pod that WORSENED into
+                    # CRITICAL/FAILED while no action was executed is a missed
+                    # detection even when it was predicted — teach the decision
+                    # model + calibration monitor the implicit "none" outcome.
+                    # Before this, the learning loop only saw outcomes of
+                    # executed actions, so an intervention-light steady state
+                    # fed ZERO calibration samples / transitions back (both
+                    # counters stayed at 0). Held/dedup results carry a real
+                    # action name, so "action == none" keeps those pods out.
+                    _no_action_taken = not results or all(
+                        getattr(r, "action", "none") == "none" for r in results
+                    )
+                    if (
+                        getattr(tracker, "state", None) != getattr(tracker, "prev_state", None)
+                        and _no_action_taken
+                    ):
+                        try:
+                            ctx.remediation_manager.note_inaction_outcome(
+                                pod_key,
+                                tracker.prev_state,
+                                tracker.state,
+                                float(getattr(result, "risk_score", 0.0)),
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            logger.debug(
+                                "Inaction-outcome learning failed for %s: %s", pod_key, e
+                            )
 
                 # Shadow-mode validation: log the planner's recommendation
                 # vs the actions that actually executed. Purely additive —

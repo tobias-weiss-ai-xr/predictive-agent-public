@@ -31,7 +31,7 @@ from predictive_agent.collector import (
 )
 from predictive_agent.markov import MarkovChain
 from predictive_agent.mcp_server import Tool, handle_request
-from predictive_agent.metrics import collect_decision_metrics, render_prometheus
+from predictive_agent.metrics import collect_backtest_metrics, collect_decision_metrics, render_prometheus
 from predictive_agent.pomdp import ACTION_TYPES, ActionAwareTransitionModel, ValueIterationPolicy
 
 
@@ -510,6 +510,10 @@ class RequestHandler(BaseHTTPRequestHandler):
         if decision_metrics:
             lines.append("")
             lines.append(render_prometheus(decision_metrics))
+        backtest_metrics = collect_backtest_metrics(_context.backtester)
+        if backtest_metrics:
+            lines.append("")
+            lines.append(render_prometheus(backtest_metrics))
         return "\n".join(lines) + "\n"
 
     def _status_dict(self):

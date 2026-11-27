@@ -872,7 +872,9 @@ class TestMutationSurvivorKillers(TestNamedActionSafetyGates):
             risk_threshold=0.0, decision_model=model,
             action_costs={"act": 2.0}, failure_cost=0.6)
         manager.evaluate = MagicMock(return_value=[])
-        with patch("predictive_agent.pomdp.Planner", _fake_planner_cls(rec, _FakePlan([]))):
+        with patch.object(_config, "MIN_MODEL_SUPPORT", 0.0), patch(
+            "predictive_agent.pomdp.Planner", _fake_planner_cls(rec, _FakePlan([]))
+        ):
             manager.plan_and_execute("CRITICAL", "p", _NS(), _NS(), 0.9, horizon=4)
         assert rec[0] == {"model": model, "action_costs": {"act": 2.0}, "failure_cost": 0.6}
         assert rec[1] == ("CRITICAL", 4)
@@ -886,7 +888,7 @@ class TestMutationSurvivorKillers(TestNamedActionSafetyGates):
         manager._apply_named_action = apply_spy
         manager.interventions_executed = 5
         pod, pred = _NS(state="DEGRADED"), _NS()
-        with patcher:
+        with patch.object(_config, "MIN_MODEL_SUPPORT", 0.0), patcher:
             results = manager.plan_and_execute(
                 "DEGRADED", "pod-1", pod, pred, 0.9, namespace="ns", node_name="n1")
         assert results == [ok]
@@ -906,7 +908,7 @@ class TestMutationSurvivorKillers(TestNamedActionSafetyGates):
         manager, _, patcher = self._planner_manager(plan)
         apply_spy = MagicMock(return_value=None)
         manager._apply_named_action = apply_spy
-        with patcher:
+        with patch.object(_config, "MIN_MODEL_SUPPORT", 0.0), patcher:
             manager.plan_and_execute("STRESSED", "p", _NS(), _NS(), 0.9)
         assert apply_spy.call_args.kwargs.get("from_state") == "STRESSED"
 
@@ -918,7 +920,7 @@ class TestMutationSurvivorKillers(TestNamedActionSafetyGates):
             action="act", target="p", success=False, dry_run=True,
             message="failed", outcome="failed")))
         manager.cumulative_p_failed_reduction = 5.0
-        with patcher:
+        with patch.object(_config, "MIN_MODEL_SUPPORT", 0.0), patcher:
             results = manager.plan_and_execute("CRITICAL", "p", _NS(), _NS(), 0.9)
         assert len(results) == 1 and results[0].success is False
         assert manager.cumulative_p_failed_reduction == 5.0
@@ -945,7 +947,7 @@ class TestMutationSurvivorKillers(TestNamedActionSafetyGates):
         manager.register_action(self._action(name="act"))
         manager.cumulative_p_failed_reduction = 5.0
         none_calls.clear()  # drop the expectation-computation calls
-        with patcher:
+        with patch.object(_config, "MIN_MODEL_SUPPORT", 0.0), patcher:
             results = manager.plan_and_execute("CRITICAL", "p", _NS(), _NS(), 0.9, horizon=3)
         assert any(r.success for r in results)
         assert none_calls == ["none", "none", "none"]
@@ -954,7 +956,7 @@ class TestMutationSurvivorKillers(TestNamedActionSafetyGates):
     def test_visibility_none_decision_entry(self):
         manager, _, patcher = self._planner_manager(_FakePlan([_plan_step("none")]))
         manager.risk_threshold = 0.7
-        with patcher:
+        with patch.object(_config, "MIN_MODEL_SUPPORT", 0.0), patcher:
             results = manager.plan_and_execute("CRITICAL", "pod-9", _NS(), _NS(), 0.7)
         assert len(results) == 1
         entry = results[0]
@@ -972,7 +974,7 @@ class TestMutationSurvivorKillers(TestNamedActionSafetyGates):
         plan = _FakePlan([_plan_step("none"), _plan_step("none")])
         manager, _, patcher = self._planner_manager(plan)
         manager.risk_threshold = 0.7
-        with patcher:
+        with patch.object(_config, "MIN_MODEL_SUPPORT", 0.0), patcher:
             results = manager.plan_and_execute(
                 "CRITICAL", "p", _NS(), _NS(), 0.9, max_actions=1)
         assert len(results) == 1 and results[0].action == "none"
@@ -981,7 +983,7 @@ class TestMutationSurvivorKillers(TestNamedActionSafetyGates):
         plan = _FakePlan([_plan_step("none"), _plan_step("none")])
         manager, _, patcher = self._planner_manager(plan)
         manager.risk_threshold = 0.7
-        with patcher:
+        with patch.object(_config, "MIN_MODEL_SUPPORT", 0.0), patcher:
             results = manager.plan_and_execute(
                 "CRITICAL", "p", _NS(), _NS(), 0.9, max_actions=0)
         assert results == []

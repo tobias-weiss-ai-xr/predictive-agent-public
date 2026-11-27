@@ -659,7 +659,7 @@ class TestHandleVerifyFailure:
     def test_sets_held_state_exact(self, clock):
         clock["now"] = 1000.0
         with mock.patch.object(config, "VERIFY_HOLD_S", 60):
-            with mock.patch.object(config, "REMEDITATION_REVERT_ENABLED", False):
+            with mock.patch.object(config, "REMEDIATION_REVERT_ENABLED", False):
                 with mock.patch.object(rem_mod, "_utc_now", return_value="2025-01-01T1000.0Z"):
                     mgr = _manager()
                     action = _PlainAction()
@@ -684,7 +684,7 @@ class TestHandleVerifyFailure:
     def test_reversible_action_triggers_revert_when_enabled(self, clock):
         clock["now"] = 1000.0
         with mock.patch.object(config, "VERIFY_HOLD_S", 60):
-            with mock.patch.object(config, "REMEDITATION_REVERT_ENABLED", True):
+            with mock.patch.object(config, "REMEDIATION_REVERT_ENABLED", True):
                 mgr = _manager()
                 action = _PlainAction()  # reversible=True
                 mgr.register_action(action)
@@ -700,7 +700,7 @@ class TestHandleVerifyFailure:
     def test_escalates_and_queues_approval_for_irreversible(self, clock):
         clock["now"] = 1000.0
         with mock.patch.object(config, "VERIFY_HOLD_S", 60):
-            with mock.patch.object(config, "REMEDITATION_REVERT_ENABLED", False):
+            with mock.patch.object(config, "REMEDIATION_REVERT_ENABLED", False):
                 with mock.patch.object(config, "VERIFY_ESCALATE_AFTER", 1):
                     mgr = _manager()
                     action = _IneligibleAction()  # reversible=False
@@ -1264,7 +1264,7 @@ class TestVerifyRemediations:
         )
         with mock.patch.object(config, "VERIFY_HOLD_S", 60):
             with mock.patch.object(config, "VERIFY_SETTLING_S", 1):
-                with mock.patch.object(config, "REMEDITATION_REVERT_ENABLED", False):
+                with mock.patch.object(config, "REMEDIATION_REVERT_ENABLED", False):
                     with mock.patch.object(rem_mod, "_now", return_value=1000.0):
                         mgr.verify_remediations(worse_pod)
 
@@ -1831,7 +1831,7 @@ class TestExactLogMessages:
     def test_verify_failure_held_log(self, clock, caplog):
         clock["now"] = 1000.0
         with mock.patch.object(config, "VERIFY_HOLD_S", 60), \
-                mock.patch.object(config, "REMEDITATION_REVERT_ENABLED", False):
+                mock.patch.object(config, "REMEDIATION_REVERT_ENABLED", False):
             mgr = _manager()
             action = _PlainAction()
             key = "ns1/pod-1/plain_act/w300"

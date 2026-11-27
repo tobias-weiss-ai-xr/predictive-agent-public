@@ -128,7 +128,10 @@ class TestPlanAndExecute:
         mgr.register_action(action)
         pod = _pod()
         fake = self._fake_result()
-        with mock.patch("predictive_agent.pomdp.Planner") as MockPlanner:
+        with(
+            mock.patch("predictive_agent.config.MIN_MODEL_SUPPORT", 0.0),
+            mock.patch("predictive_agent.pomdp.Planner") as MockPlanner,
+        ):
             mock_plan = MockPlanner.return_value
             mock_plan.plan.return_value = SimpleNamespace(
                 steps=_planner_steps("test_action", "test_action", "test_action"),
@@ -170,7 +173,10 @@ class TestPlanAndExecute:
         mgr.register_action(action)
         pod = _pod()
         fake = self._fake_result()
-        with mock.patch("predictive_agent.pomdp.Planner") as MockPlanner:
+        with (
+            mock.patch("predictive_agent.config.MIN_MODEL_SUPPORT", 0.0),
+            mock.patch("predictive_agent.pomdp.Planner") as MockPlanner,
+        ):
             mock_plan = MockPlanner.return_value
             mock_plan.plan.return_value = SimpleNamespace(
                 steps=_planner_steps("test_action", "test_action"),

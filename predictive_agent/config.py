@@ -236,12 +236,17 @@ VERIFY_ESCALATE_AFTER = int(os.environ.get("VERIFY_ESCALATE_AFTER", "2"))
 # (clamped per action; 0 = canary disabled). Conservative 15% per guidance.
 CANARY_MAX_FRACTION = float(os.environ.get("CANARY_MAX_FRACTION", "0.15"))
 # Auto-revert on failed verification (only for actions declaring reversible=True).
-REMEDITATION_REVERT_ENABLED = os.environ.get(
-    "REMEDITATION_REVERT_ENABLED", "true"
+# The env var name was originally misspelled REMEDITATION_REVERT_ENABLED (typo);
+# the correct spelling is honored first and the legacy spell is read as a
+# fallback so existing deployments do not silently flip back to the default.
+_REVERT_LEGACY = os.environ.get("REMEDITATION_REVERT_ENABLED")
+REMEDIATION_REVERT_ENABLED = os.environ.get(
+    "REMEDIATION_REVERT_ENABLED",
+    _REVERT_LEGACY if _REVERT_LEGACY is not None else "true",
 ).lower() in ("true", "1", "yes")
 # Confidence gate: never let the planner act when the predictor's confidence is
 # below this threshold (0.0 = gate disabled).
-MIN_ACTION_CONFIDENCE = float(os.environ.get("MIN_ACTION_CONFIDENCE", "0.0"))
+MIN_ACTION_CONFIDENCE = float(os.environ.get("MIN_ACTION_CONFIDENCE", "0.5"))
 # Calibration monitor rolling window + drift thresholds.
 CALIBRATION_WINDOW = int(os.environ.get("CALIBRATION_WINDOW", "100"))
 CALIBRATION_BRIER_ALERT = float(os.environ.get("CALIBRATION_BRIER_ALERT", "0.25"))
@@ -253,11 +258,21 @@ AUTO_ROLLBACK_ON_DRIFT = os.environ.get("AUTO_ROLLBACK_ON_DRIFT", "false").lower
     "true", "1", "yes"
 )
 
+# A1 natural-incident learning: when True the reconcile loop also learns
+# from *inaction* — a pod worsening HEALTHY/DEGRADED -> CRITICAL/FAILED while
+# no action was executed feeds the decision model + calibration monitor an
+# implicit "none" outcome. Without it the learning loop only sees outcomes of
+# executed actions, so an intervention-light steady state feeds no calibration
+# samples / transitions back.
+LEARN_FROM_INACTION = os.environ.get("LEARN_FROM_INACTION", "true").lower() in (
+    "true", "1", "yes"
+)
+
 # ─── Continual learning: forgetting & drift-aware reweighting (#10) ────────#
 # Minimum observed transitions from a state before the planner is trusted to
 # act from it. Below this, plan_and_execute falls back to conservative reactive
 # remediation. 0 disables the gate (always trust the planner).
-MIN_MODEL_SUPPORT = float(os.environ.get("MIN_MODEL_SUPPORT", "0.0"))
+MIN_MODEL_SUPPORT = float(os.environ.get("MIN_MODEL_SUPPORT", "0.3"))
 # Periodic exponential forgetting: decay learned counts every N reconcile
 # cycles so stale transitions fade. 0 disables periodic decay.
 MODEL_DECAY_INTERVAL = int(os.environ.get("MODEL_DECAY_INTERVAL", "0"))

@@ -89,9 +89,25 @@ class BacktestReport:
     true_negatives: int = 0
     ttf_errors: list = field(default_factory=list)
     calibration: dict = field(default_factory=dict)
+    # B4 honesty fields: the confusion matrix is only meaningful once real
+    # failures have actually been observed. In a healthy cluster the positive
+    # class is starved (0 TP / 0 FN in 10k pairs), which reads as "perfect
+    # detection" but actually just means recall is undefined. Expose the
+    # positive-class footprint so operators can tell a validated model from
+    # one that has never seen a failure.
+    positive_samples: int = 0
+    positive_rate: float = 0.0
+    validated_on_failures: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+# Minimum number of matched actual-failure samples before the report claims
+# failure-validated recall/precision (a handful of positives is noise).
+MIN_POSITIVE_SAMPLES_FOR_VALIDATION = int(
+    os.environ.get("BACKTEST_MIN_POSITIVE_SAMPLES", "10")
+)
 
 
 class Backtester:
@@ -246,6 +262,14 @@ class Backtester:
                 })
 
         report.brier_score = brier_sum / len(matched)
+
+        # Positive-class footprint (B4): how many matched pairs actually failed
+        # and how recall/precision should be read.
+        report.positive_samples = report.true_positives + report.false_negatives
+        report.positive_rate = report.positive_samples / len(matched)
+        report.validated_on_failures = (
+            report.positive_samples >= MIN_POSITIVE_SAMPLES_FOR_VALIDATION
+        )
 
         # Calibration: group predictions into bins and check reliability
         bins = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]

@@ -830,7 +830,7 @@ class TestHandleVerifyFailure:
 
     def test_appends_held_alert_to_outcome_alerts(self, clock):
         clock["now"] = 1000.0
-        with mock.patch.object(config, "REMEDITATION_REVERT_ENABLED", False):
+        with mock.patch.object(config, "REMEDIATION_REVERT_ENABLED", False):
             mgr = _manager()
             action = _ReversibleAction()
             # reversible=True but revert disabled, so kind stays "remediation_held"
