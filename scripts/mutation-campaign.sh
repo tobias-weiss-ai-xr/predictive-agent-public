@@ -74,15 +74,15 @@ PYEOF
 }
 
 # Floors: tighten from the first nightly run's numbers.
-run_campaign scoring 85 \
+run_campaign scoring 88 \
     "predictive_agent/risk.py,predictive_agent/markov.py,predictive_agent/kalman.py,predictive_agent/predictor.py" \
-    "tests/test_risk.py,tests/test_markov.py,tests/test_kalman.py,tests/test_kalman_anomaly.py,tests/test_kalman_params.py,tests/test_predictor.py,tests/test_state_hysteresis.py"
+    "tests/test_risk.py,tests/test_risk_golden.py,tests/test_markov.py,tests/test_kalman.py,tests/test_kalman_anomaly.py,tests/test_kalman_params.py,tests/test_predictor.py,tests/test_state_hysteresis.py"
 
 run_campaign remediator 85 \
     "predictive_agent/remediator.py,predictive_agent/actions" \
     "tests/test_remediator.py,tests/test_docker_remediation.py,tests/test_integration_remediation.py,tests/test_bounded_autonomy.py,tests/test_calibration_guardrails.py,tests/test_continual_learning.py,tests/test_crashloop_escalation.py,tests/test_mutation_harvest.py,tests/test_action_guards.py,tests/test_cost_model.py,tests/test_verify_after_act.py,tests/test_remediator_survivors.py,tests/test_dispatch_survivors.py,tests/test_remediator_plan_survivors.py,tests/test_remediator_string_survivors.py"
 
-run_campaign pomdp 90 \
+run_campaign pomdp 92 \
     "predictive_agent/pomdp.py" \
     "tests/test_pomdp.py"
 
