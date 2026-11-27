@@ -45,12 +45,14 @@ import logging
 import os
 import smtplib
 import ssl
+import time as _time
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from predictive_agent import config
 from predictive_agent.config import (
     ALERT_EMAIL_FROM,
     ALERT_EMAIL_TO,
@@ -319,6 +321,15 @@ class NotificationManager:
         self.webhook = webhook_notifier or WebhookNotifier()
         self.channel = (channel or os.environ.get("NOTIFY_CHANNEL", "matrix")).lower()
         self.history: list[dict] = []
+        # C10 alert-noise dedupe state: fingerprint -> last-send epoch for
+        # identical-alert dedupe, and a bounded list of recent delivery epochs
+        # for the burst cap. Only actual deliveries update these; a dropped
+        # repeat never extends the dedupe stamp.
+        self._dedupe_stamps: dict = {}
+        self._burst_ts: list = []
+        self.sent_count = 0
+        self.deduped_count = 0
+        self.capped_count = 0
 
     def notify(
         self,
@@ -355,6 +366,51 @@ class NotificationManager:
         channel = self.channel
         email_sent = False
         webhook_sent = False
+
+        # C10: last-resort identical-alert dedupe + burst cap at the delivery
+        # boundary (the reconcile layer already throttles per key). Only
+        # applies when a channel would actually deliver; channel="none" is a
+        # pure history recorder and never filtered.
+        drop_reason: Optional[str] = None
+        fingerprint = (alert_type, pod_name, status, action_taken, details)
+        if config.NOTIFY_DEDUPE_ENABLED and channel != "none":
+            now = _time.time()
+            self._dedupe_stamps = {
+                k: v for k, v in self._dedupe_stamps.items()
+                if now - v < config.NOTIFY_DEDUPE_WINDOW
+            }
+            if fingerprint in self._dedupe_stamps:
+                drop_reason = "deduped"
+            else:
+                self._burst_ts = [
+                    ts for ts in self._burst_ts
+                    if now - ts < config.NOTIFY_BURST_WINDOW
+                ]
+                if len(self._burst_ts) >= config.NOTIFY_BURST_LIMIT:
+                    drop_reason = "capped"
+        if drop_reason is not None:
+            self.history.append(
+                {
+                    "timestamp": timestamp,
+                    "alert_type": alert_type,
+                    "pod_name": pod_name,
+                    "risk_score": risk_score,
+                    "action_taken": action_taken,
+                    "status": status,
+                    "email_sent": False,
+                    "webhook_sent": False,
+                    "channel": channel,
+                    "deduped": True,
+                    "reason": drop_reason,
+                }
+            )
+            if len(self.history) > 100:
+                self.history = self.history[-100:]
+            if drop_reason == "deduped":
+                self.deduped_count += 1
+            else:
+                self.capped_count += 1
+            return False, False
 
         if channel in ("email", "both"):
             # Email
@@ -394,7 +450,7 @@ class NotificationManager:
                 )
             webhook_sent = self.webhook.send(payload)
 
-        # Record in history
+        # Record in history (dropped repeats also land here, above)
         self.history.append(
             {
                 "timestamp": timestamp,
@@ -406,6 +462,7 @@ class NotificationManager:
                 "email_sent": email_sent,
                 "webhook_sent": webhook_sent,
                 "channel": channel,
+                "deduped": False,
             }
         )
 
@@ -413,7 +470,27 @@ class NotificationManager:
         if len(self.history) > 100:
             self.history = self.history[-100:]
 
+        # A real delivery updates the dedupe stamp + burst ledger; a drop
+        # (handled above) never does, so repeats can fire again after the
+        # original window elapses.
+        if email_sent or webhook_sent:
+            now = _time.time()
+            self._dedupe_stamps[fingerprint] = now
+            self._burst_ts.append(now)
+            self.sent_count += 1
+
         return email_sent, webhook_sent
+
+    def dedupe_stats(self) -> dict:
+        """C10 observability: how many alerts were filtered at the boundary."""
+        return {
+            "sent_count": self.sent_count,
+            "deduped_count": self.deduped_count,
+            "capped_count": self.capped_count,
+            "window_s": config.NOTIFY_DEDUPE_WINDOW,
+            "burst_limit": config.NOTIFY_BURST_LIMIT,
+            "burst_window_s": config.NOTIFY_BURST_WINDOW,
+        }
 
     def notify_alertmanager(
         self,

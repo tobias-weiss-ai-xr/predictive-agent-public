@@ -342,6 +342,22 @@ WEBHOOK_TIMEOUT = int(os.environ.get("WEBHOOK_TIMEOUT", "10"))
 # or "email", "both", "none".
 NOTIFY_CHANNEL = os.environ.get("NOTIFY_CHANNEL", "matrix").lower()
 
+# ─── Alert-noise dedupe (C10) ────────────────────────────────────────────
+# Last-resort filter at the NotificationManager boundary, on top of the
+# reconcile-layer per-key throttle windows. Two mechanisms: an exact repeat of
+# (alert_type, pod_name, status, action_taken, details) within
+# NOTIFY_DEDUPE_WINDOW seconds is dropped (collapses cross-source repeats of
+# the same incident), and at most NOTIFY_BURST_LIMIT deliveries per
+# NOTIFY_BURST_WINDOW seconds are permitted (stops any N-webhook restart
+# flood even if reconcile aggregation regresses). Dropped alerts are still
+# recorded in history with deduped=True for auditability.
+NOTIFY_DEDUPE_ENABLED = os.environ.get(
+    "NOTIFY_DEDUPE_ENABLED", "true"
+).lower() in ("true", "1", "yes")
+NOTIFY_DEDUPE_WINDOW = int(os.environ.get("NOTIFY_DEDUPE_WINDOW", "300"))
+NOTIFY_BURST_LIMIT = int(os.environ.get("NOTIFY_BURST_LIMIT", "60"))
+NOTIFY_BURST_WINDOW = int(os.environ.get("NOTIFY_BURST_WINDOW", "600"))
+
 # ─── FixImage — GitOps-aware image-drift remediation ────────────────────
 # Bounded-autonomy image fixes for "restart cannot help" crash loops (version/
 # image drift, e.g. alembic migrations advanced shared state beyond the pinned
