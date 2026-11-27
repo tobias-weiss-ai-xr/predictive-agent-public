@@ -1564,3 +1564,212 @@ class TestStatsAndLogs:
         mgr.decision_model = model
         mgr.feed_transition("CRITICAL", "restart", "HEALTHY")
         model.record_transition.assert_called_once_with("CRITICAL", "HEALTHY", "restart")
+
+
+# ── plan_and_execute: planner-loop branch coverage ─────────────────────
+
+
+class TestPlanAndExecuteBranches:
+    def _fake_step(self, action):
+        return SimpleNamespace(action=action, expected_failed_prob_after=0.3)
+
+    def test_model_support_fallback_to_reactive(self, clock):
+        with mock.patch.object(config, "MIN_ACTION_CONFIDENCE", 0.0), \
+                mock.patch.object(config, "MIN_MODEL_SUPPORT", 0.5):
+            mgr = _manager()
+            action = _PlainAction()
+            mgr.register_action(action)
+            mgr.decision_model = mock.MagicMock()
+            mgr.decision_model.is_confident.return_value = False
+            results = mgr.plan_and_execute(
+                "CRITICAL", "pod-1", _pod(replicas=1),
+                SimpleNamespace(confidence=1.0), 0.9,
+                namespace="ns1", node_name="node-1",
+            )
+        # reactive evaluate path executes the plain action
+        assert any(getattr(r, "success", False) for r in results)
+
+    def test_max_actions_caps_steps(self, clock):
+        mgr = _manager()
+        action = _PlainAction()
+        mgr.register_action(action)
+        mgr.degraded = False
+        mgr.decision_model = mock.MagicMock()
+        mgr.decision_model.failed_probability.return_value = 0.5
+        step = SimpleNamespace(action="plain_act", expected_failed_prob_after=0.3)
+        fake_plan = SimpleNamespace(steps=[step, step])
+        with mock.patch.object(config, "MIN_ACTION_CONFIDENCE", 0.0), \
+                mock.patch.object(config, "MIN_MODEL_SUPPORT", 0.0), \
+                mock.patch.object(config, "PLANNING_ENABLED", True), \
+                mock.patch("predictive_agent.pomdp.Planner") as P:
+            P.return_value.plan.return_value = fake_plan
+            results = mgr.plan_and_execute(
+                "CRITICAL", "pod-1", _pod(replicas=1),
+                SimpleNamespace(confidence=1.0), 0.9,
+                max_actions=1, namespace="ns1", node_name="node-1",
+            )
+        assert len(results) == 1
+        assert results[0].message == "executed plain_act"
+        assert mgr.interventions_executed == 1
+
+    def test_none_steps_skipped_and_executed_counted(self, clock):
+        mgr = _manager()
+        action = _PlainAction()
+        mgr.register_action(action)
+        mgr.degraded = False
+        mgr.decision_model = mock.MagicMock()
+        mgr.decision_model.failed_probability.return_value = 0.5
+        step_none = SimpleNamespace(action="none", expected_failed_prob_after=0.4)
+        step_act = SimpleNamespace(action="plain_act", expected_failed_prob_after=0.2)
+        fake_plan = SimpleNamespace(steps=[step_none, step_act])
+        with mock.patch.object(config, "MIN_ACTION_CONFIDENCE", 0.0), \
+                mock.patch.object(config, "MIN_MODEL_SUPPORT", 0.0), \
+                mock.patch.object(config, "PLANNING_ENABLED", True), \
+                mock.patch("predictive_agent.pomdp.Planner") as P:
+            P.return_value.plan.return_value = fake_plan
+            results = mgr.plan_and_execute(
+                "CRITICAL", "pod-1", _pod(replicas=1),
+                SimpleNamespace(confidence=1.0), 0.9,
+                namespace="ns1", node_name="node-1",
+            )
+        assert len(results) == 1
+        assert results[0].action == "plain_act"
+        assert mgr.interventions_executed == 1
+        # cumulative expected reduction: none_pf(0.5) - plan_pf(0.2) = 0.3
+        assert abs(mgr.cumulative_p_failed_reduction - 0.3) < 1e-9
+
+    def test_reduction_never_negative(self, clock):
+        mgr = _manager()
+        action = _PlainAction()
+        mgr.register_action(action)
+        mgr.degraded = False
+        mgr.decision_model = mock.MagicMock()
+        mgr.decision_model.failed_probability.return_value = 0.1
+        step = SimpleNamespace(action="plain_act", expected_failed_prob_after=0.9)
+        fake_plan = SimpleNamespace(steps=[step])
+        with mock.patch.object(config, "MIN_ACTION_CONFIDENCE", 0.0), \
+                mock.patch.object(config, "MIN_MODEL_SUPPORT", 0.0), \
+                mock.patch.object(config, "PLANNING_ENABLED", True), \
+                mock.patch("predictive_agent.pomdp.Planner") as P:
+            P.return_value.plan.return_value = fake_plan
+            mgr.plan_and_execute(
+                "CRITICAL", "pod-1", _pod(replicas=1),
+                SimpleNamespace(confidence=1.0), 0.9,
+                namespace="ns1", node_name="node-1",
+            )
+        # none_pf(0.1) - plan_pf(0.9) < 0 -> clamped to 0
+        assert mgr.cumulative_p_failed_reduction == 0.0
+
+
+# ── _dispatch_action: widened-within-window dedup branch ───────────────
+
+
+class TestDispatchWidenDedup:
+    def test_already_widened_within_window_is_deduped(self, clock):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=300)
+        action = _CanaryAction()
+        mgr.register_action(action)
+        base = mgr.idempotency_key("ns1", "pod-1", action.name)
+        widen_key = f"{base}/widen"
+        # widen leg ran 100s ago (within window) and is not held
+        mgr._dedup_history[widen_key] = {
+            "timestamp": 900.0, "verify": "verified", "recorded_at": 900.0,
+        }
+        with mock.patch.object(rem_mod, "_now", return_value=1000.0):
+            result = mgr._dispatch_action(
+                action, _pod(replicas=3), "pod-1", "ns1", "node-1",
+                from_state="CRITICAL", risk_score=0.9,
+            )
+        assert result is not None
+        assert result.outcome == RemediationOutcome.SKIPPED.value
+        assert result.idempotency_key == widen_key
+        assert result.message.startswith("[op] dedup: action already executed")
+        assert mgr.deduped_count == 1
+
+    def test_widen_dedup_expired_rearms_to_widen(self, clock):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=100)
+        action = _CanaryAction()
+        mgr.register_action(action)
+        base = mgr.idempotency_key("ns1", "pod-1", action.name)
+        widen_key = f"{base}/widen"
+        canary_key = f"{base}/canary"
+        # widen leg ran 200s ago (outside window), canary verified -> widen re-runs
+        mgr._dedup_history[widen_key] = {
+            "timestamp": 800.0, "verify": "verified", "recorded_at": 800.0,
+        }
+        mgr._dedup_history[canary_key] = {
+            "timestamp": 700.0, "verify": "verified", "recorded_at": 700.0,
+        }
+        with mock.patch.object(rem_mod, "_now", return_value=1000.0):
+            result = mgr._dispatch_action(
+                action, _pod(replicas=3), "pod-1", "ns1", "node-1",
+                from_state="CRITICAL", risk_score=0.9,
+            )
+        assert result is not None
+        assert result.success is True
+        assert result.outcome == RemediationOutcome.WIDENED.value
+        # expired widen entry was pruned then re-recorded by the fresh widen run
+        fresh = mgr._dedup_history[widen_key]
+        assert fresh["verify"] == "pending"
+        assert fresh["timestamp"] == 1000.0
+        assert fresh["message"] == "widened (0.15)"
+
+
+# ── _apply_named_action: review-gate + destructive branch ──────────────
+
+
+class TestApplyNamedActionGates:
+    def test_review_gate_defers(self, clock):
+        clock["now"] = 1000.0
+        with mock.patch.object(rem_mod, "_utc_now", return_value="2025-01-01T1000.0Z"):
+            mgr = _manager(review_tier="moderate")
+            action = _DestructiveAction()
+            mgr.register_action(action)
+            result = mgr._apply_named_action(
+                action.name, "pod-1", _pod(replicas=3), {}, 0.9, "ns1", "node-1",
+                from_state="CRITICAL",
+            )
+        assert result is not None
+        assert result.outcome == RemediationOutcome.REVIEW_REQUIRED.value
+        assert result.message == (
+            "review_required: tier destructive >= moderate; "
+            "approve signature ns1/pod-1/destructive_act (review id rev-1)"
+        )
+        assert mgr.reviews_deferred == 1
+        assert mgr.context.audit_log[-1]["outcome"] == RemediationOutcome.REVIEW_REQUIRED.value
+
+    def test_dedup_gate_within_apply(self, clock):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=300)
+        action = _PlainAction()
+        mgr.register_action(action)
+        base = mgr.idempotency_key("ns1", "pod-1", action.name)
+        mgr._dedup_history[base] = {
+            "timestamp": 900.0, "verify": "pending", "recorded_at": 900.0,
+        }
+        with mock.patch.object(rem_mod, "_now", return_value=1000.0):
+            result = mgr._apply_named_action(
+                action.name, "pod-1", _pod(replicas=1), {}, 0.5, "ns1", "node-1",
+                from_state="CRITICAL",
+            )
+        assert result is not None
+        assert result.outcome == RemediationOutcome.SKIPPED.value
+        assert result.message.startswith("[op] dedup:")
+        assert mgr.context.audit_log[-1]["message"] == result.message
+        assert mgr.interventions_executed == 0
+
+    def test_dispatch_sets_acted_outcome_via_apply_for_canary(self, clock):
+        clock["now"] = 1000.0
+        mgr = _manager(dedup_window=300)
+        action = _CanaryAction()
+        mgr.register_action(action)
+        result = mgr._apply_named_action(
+            action.name, "pod-1", _pod(replicas=3), {}, 0.9, "ns1", "node-1",
+            from_state="CRITICAL",
+        )
+        assert result is not None
+        assert result.outcome == RemediationOutcome.CANARY.value
+        assert mgr.context.audit_log[-1]["outcome"] == RemediationOutcome.CANARY.value
+        assert mgr.interventions_executed == 0  # _apply path does not count
