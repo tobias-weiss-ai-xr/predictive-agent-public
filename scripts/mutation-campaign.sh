@@ -7,9 +7,11 @@
 #
 # Output: mutation-report.json + exit 1 if a campaign's kill rate falls below
 # its floor. remediator floor tightened to 85 after the survivor-killer test
-# battery (2026-09-17: 89.6% measured, 1527/1704, 0 untested); scoring floor
-# tightened to 85 after its survivor-killer battery + a real Kalman FP10 bug
-# fix (2026-09-17: 87.7% measured, 922/1051, 0 untested; remaining survivors
+# battery (2026-11-27 post-v4.1.0 re-measure: 85.6% = 2613/3053, 0 untested;
+# the 526-mutant no-tests spike ended once test_verify_after_act.py joined the
+# selection, leaving 440 real survivors in the bounded-autonomy paths); scoring
+# floor tightened to 85 after its survivor-killer battery + a real Kalman FP10
+# bug fix (2026-09-17: 87.7% measured, 922/1051, 0 untested; remaining survivors
 # are calibration tweaks, structural-zero algebra, and fallback defaults).
 # pomdp floor set to 90 after its survivor-killer battery (2026-09-18:
 # 94.4% measured, 726/769, 0 untested; remaining survivors are docstrings,
@@ -78,7 +80,7 @@ run_campaign scoring 85 \
 
 run_campaign remediator 85 \
     "predictive_agent/remediator.py,predictive_agent/actions" \
-    "tests/test_remediator.py,tests/test_docker_remediation.py,tests/test_integration_remediation.py,tests/test_bounded_autonomy.py,tests/test_calibration_guardrails.py,tests/test_continual_learning.py,tests/test_crashloop_escalation.py,tests/test_mutation_harvest.py,tests/test_action_guards.py,tests/test_cost_model.py,tests/test_verify_after_act.py,tests/test_remediator_survivors.py,tests/test_dispatch_survivors.py"
+    "tests/test_remediator.py,tests/test_docker_remediation.py,tests/test_integration_remediation.py,tests/test_bounded_autonomy.py,tests/test_calibration_guardrails.py,tests/test_continual_learning.py,tests/test_crashloop_escalation.py,tests/test_mutation_harvest.py,tests/test_action_guards.py,tests/test_cost_model.py,tests/test_verify_after_act.py,tests/test_remediator_survivors.py,tests/test_dispatch_survivors.py,tests/test_remediator_plan_survivors.py,tests/test_remediator_string_survivors.py"
 
 run_campaign pomdp 90 \
     "predictive_agent/pomdp.py" \
