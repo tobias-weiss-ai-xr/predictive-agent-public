@@ -451,6 +451,9 @@ def evaluate_pods(
     # cycle and emitted as ONE remediation_exhausted summary, throttled 600s,
     # instead of one webhook per pod.
     escalated_this_cycle: list = []
+    # Pod keys processed this cycle — used at the end to prune stale cached
+    # predictions and notify-throttle stamps (bounded-memory hygiene).
+    active_pod_keys: set = set()
 
     for pod in pod_items:
         # Ghost pods (Terminating / dead-RS leftovers) are excluded from the
@@ -479,12 +482,12 @@ def evaluate_pods(
             ns = pod.get("metadata", {}).get("namespace", "default")
             name = pod.get("metadata", {}).get("name", "unknown")
             pod_key = f"{ns}/{name}"
+            active_pod_keys.add(pod_key)
             node_name = pod.get("spec", {}).get("nodeName", "unknown")
 
             # Get existing tracker to use its data
             tracker = ctx.state_model.pods.get(pod_key)
-            if tracker is None:
-                # Skip if no tracker exists
+            if tracker is None:                # Skip if no tracker exists
                 continue
 
             # Use existing tracker values (no new collection in degraded mode)
@@ -1129,11 +1132,34 @@ def evaluate_pods(
         except Exception as e:  # noqa: BLE001
             logger.debug("Aggregated escalation notify failed: %s", e)
 
+    # ─── Bounded-memory hygiene -------------------------------------------
+    # Prune cached predictions and notify-throttle stamps for pods not seen
+    # this cycle (removed/ghost). Without this both dicts grow unbounded on a
+    # long-running operator and dead pods keep polluting the mean-confidence
+    # metric. Throttle stamps older than an hour are always safe to drop.
+    if ctx.predictor is not None and active_pod_keys:
+        ctx.predictor.prune_predictions(active_pod_keys)
+    _prune_autonomy_notify(ctx.last_autonomy_notify, time.time(), 3600)
+
     out.pods_tracked = pods_tracked
     out.at_risk_count = at_risk_count
     out.cycle_plans = cycle_plans
     out.actions_executed = actions_executed_this_cycle
     return out
+
+
+def _prune_autonomy_notify(
+    stamps: dict, now: float, ttl_s: float = 3600
+) -> None:
+    """Drop notify-throttle stamps older than ttl_s.
+
+    last_autonomy_notify is a module-level dict that lives for the operator's
+    whole uptime; without pruning, stale keys for departed pods accumulate
+    forever. Called once per reconcile.
+    """
+    for key in [k for k, _ in stamps.items()]:
+        if now - stamps[key][1] > ttl_s:
+            del stamps[key]
 
 
 def _spawn_llm_analysis(

@@ -224,3 +224,18 @@ class Predictor:
             for result in self._predictions.values()
             if result.risk_score >= self.risk_threshold
         ]
+
+    def prune_predictions(self, active_keys) -> None:
+        """Drop cached predictions for pods no longer in the current pod set.
+
+        Call once per reconcile with the set of pod keys seen this cycle.
+        Without this, predictions for removed/ghost pods would stay cached
+        forever: a slow memory leak, and stale entries would keep polluting
+        ``decision_layer_mean_confidence`` after a pod left the fleet.
+        """
+        if not active_keys:
+            self._predictions.clear()
+            return
+        self._predictions = {
+            k: v for k, v in self._predictions.items() if k in active_keys
+        }
